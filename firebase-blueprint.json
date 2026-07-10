@@ -1,0 +1,224 @@
+{
+  "entities": {
+    "UserProfile": {
+      "title": "UserProfile",
+      "description": "User account information and role.",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string" },
+        "email": { "type": "string" },
+        "displayName": { "type": "string" },
+        "role": { "type": "string", "enum": ["INVESTOR", "CUSTODIAN", "ADMIN", "SUPER_ADMIN", "STAFF"] },
+        "isVerified": { "type": "boolean" },
+        "createdAt": { "type": "number" },
+        "phoneNumber": { "type": "string" },
+        "investorId": { "type": "string" },
+        "address": { "type": "string" },
+        "photoURL": { "type": "string" },
+        "status": { "type": "string", "enum": ["ACTIVE", "SUSPENDED", "PENDING"] },
+        "lastLogin": { "type": "number" }
+      },
+      "required": ["uid", "email", "displayName", "role", "isVerified", "createdAt", "status"]
+    },
+    "Livestock": {
+      "title": "Livestock",
+      "description": "Details of an animal on the platform.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "tagNumber": { "type": "string" },
+        "rfid": { "type": "string" },
+        "type": { "type": "string" },
+        "breed": { "type": "string" },
+        "gender": { "type": "string", "enum": ["M", "F"] },
+        "age": { "type": "string" },
+        "weight": { "type": "string" },
+        "purchaseDate": { "type": "number" },
+        "purchasePrice": { "type": "number" },
+        "farm": { "type": "string" },
+        "penNumber": { "type": "string" },
+        "custodianId": { "type": "string" },
+        "ownerId": { "type": "string" },
+        "feedingPlan": { "type": "string" },
+        "healthStatus": { "type": "string" },
+        "photos": { "type": "array" },
+        "videos": { "type": "array" },
+        "vaccinationHistory": { "type": "array" },
+        "vetRecords": { "type": "array" }
+      },
+      "required": ["id", "tagNumber", "type", "breed", "gender", "ownerId", "healthStatus", "createdAt"]
+    },
+    "SourcingRequest": {
+      "title": "SourcingRequest",
+      "description": "Request from an investor to source livestock.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "investorId": { "type": "string" },
+        "animalType": { "type": "string" },
+        "breed": { "type": "string" },
+        "quantity": { "type": "number" },
+        "budgetRange": { "type": "string" },
+        "notes": { "type": "string" },
+        "status": { "type": "string" },
+        "createdAt": { "type": "number" }
+      },
+      "required": ["id", "investorId", "animalType", "quantity", "status", "createdAt"]
+    },
+    "Invoice": {
+      "title": "Invoice",
+      "description": "Invoice for livestock sourcing and management.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "invoiceNumber": { "type": "string" },
+        "requestId": { "type": "string" },
+        "investorId": { "type": "string" },
+        "items": { "type": "array" },
+        "managementPackage": { "type": "object" },
+        "totalAmount": { "type": "number" },
+        "bankDetails": { "type": "object" },
+        "dueDate": { "type": "number" },
+        "status": { "type": "string" },
+        "createdAt": { "type": "number" }
+      },
+      "required": ["id", "invoiceNumber", "investorId", "totalAmount", "status", "createdAt"]
+    },
+    "PaymentReceipt": {
+      "title": "PaymentReceipt",
+      "description": "Proof of payment uploaded by investor.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "invoiceId": { "type": "string" },
+        "investorId": { "type": "string" },
+        "receiptUrl": { "type": "string" },
+        "senderBank": { "type": "string" },
+        "amount": { "type": "number" },
+        "referenceNumber": { "type": "string" },
+        "status": { "type": "string" },
+        "notes": { "type": "string" },
+        "createdAt": { "type": "number" }
+      },
+      "required": ["id", "invoiceId", "investorId", "receiptUrl", "amount", "status", "createdAt"]
+    },
+    "Opportunity": {
+      "title": "Opportunity",
+      "description": "Job or farm opportunity for custodians.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "title": { "type": "string" },
+        "location": { "type": "string" },
+        "salary": { "type": "string" },
+        "description": { "type": "string" },
+        "requirements": { "type": "array" },
+        "deadline": { "type": "number" },
+        "createdAt": { "type": "number" }
+      },
+      "required": ["id", "title", "location", "description", "createdAt"]
+    },
+    "OpportunityApplication": {
+      "title": "OpportunityApplication",
+      "description": "Custodian's application for an opportunity.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "opportunityId": { "type": "string" },
+        "custodianId": { "type": "string" },
+        "status": { "type": "string" },
+        "createdAt": { "type": "number" }
+      },
+      "required": ["id", "opportunityId", "custodianId", "status", "createdAt"]
+    },
+    "Announcement": {
+      "title": "Announcement",
+      "description": "Platform-wide or role-specific announcement.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "title": { "type": "string" },
+        "content": { "type": "string" },
+        "targetRoles": { "type": "array" },
+        "authorId": { "type": "string" },
+        "createdAt": { "type": "number" }
+      },
+      "required": ["id", "title", "content", "targetRoles", "authorId", "createdAt"]
+    },
+    "DeliveryRequest": {
+      "title": "DeliveryRequest",
+      "description": "Request for livestock delivery.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "livestockIds": { "type": "array" },
+        "investorId": { "type": "string" },
+        "address": { "type": "string" },
+        "status": { "type": "string" },
+        "scheduledDate": { "type": "number" },
+        "notes": { "type": "string" },
+        "createdAt": { "type": "number" }
+      },
+      "required": ["id", "livestockIds", "investorId", "address", "status", "createdAt"]
+    },
+    "ActivityLog": {
+      "title": "ActivityLog",
+      "description": "Log of administrative actions.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "adminId": { "type": "string" },
+        "adminName": { "type": "string" },
+        "action": { "type": "string" },
+        "targetId": { "type": "string" },
+        "targetType": { "type": "string" },
+        "previousValue": { "type": "object" },
+        "newValue": { "type": "object" },
+        "timestamp": { "type": "number" }
+      },
+      "required": ["id", "adminId", "adminName", "action", "targetId", "targetType", "timestamp"]
+    },
+    "PlatformSettings": {
+      "title": "PlatformSettings",
+      "description": "Global platform settings.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "companyName": { "type": "string" },
+        "contactEmail": { "type": "string" },
+        "contactPhone": { "type": "string" },
+        "address": { "type": "string" },
+        "bankDetails": { "type": "object" },
+        "invoicePrefix": { "type": "string" },
+        "tagPrefix": { "type": "string" },
+        "notificationTemplates": { "type": "object" },
+        "branding": { "type": "object" }
+      },
+      "required": ["id", "companyName", "contactEmail", "bankDetails"]
+    }
+  },
+  "firestore": {
+    "/users/{uid}": { "schema": "UserProfile", "description": "User profiles." },
+    "/livestock/{livestockId}": { "schema": "Livestock", "description": "Livestock registry." },
+    "/consultationRequests/{requestId}": { "schema": "SourcingRequest", "description": "Sourcing requests." },
+    "/invoices/{invoiceId}": { "schema": "Invoice", "description": "Invoices." },
+    "/paymentReceipts/{receiptId}": { "schema": "PaymentReceipt", "description": "Payment receipts." },
+    "/opportunities/{opportunityId}": { "schema": "Opportunity", "description": "Opportunities." },
+    "/opportunityApplications/{applicationId}": { "schema": "OpportunityApplication", "description": "Applications for opportunities." },
+    "/announcements/{announcementId}": { "schema": "Announcement", "description": "Announcements." },
+    "/deliveryRequests/{deliveryId}": { "schema": "DeliveryRequest", "description": "Delivery requests." },
+    "/activityLogs/{logId}": { "schema": "ActivityLog", "description": "Audit logs." },
+    "/settings/{settingId}": { "schema": "PlatformSettings", "description": "System settings." },
+    "/b2bCustomers/{uid}": { "schema": "B2BCustomer", "description": "B2B business profiles." },
+    "/wholesaleRequests/{requestId}": { "schema": "WholesaleRequest", "description": "Wholesale meat requests." },
+    "/wholesaleQuotes/{quoteId}": { "schema": "WholesaleQuote", "description": "B2B wholesale quotes." },
+    "/wholesaleContracts/{contractId}": { "schema": "WholesaleContract", "description": "Wholesale supply contracts." },
+    "/wholesaleOrders/{orderId}": { "schema": "WholesaleOrder", "description": "Wholesale meat orders." },
+    "/veterinaryCertificates/{certId}": { "schema": "VeterinaryCertificate", "description": "Veterinary inspection records." },
+    "/deliveryVehicles/{vehicleId}": { "schema": "DeliveryVehicle", "description": "Cold-chain delivery fleet." },
+    "/deliveryTracking/{trackingId}": { "schema": "DeliveryTracking", "description": "Cold-chain logistics tracking." },
+    "/wholesalePricing/{pricingId}": { "schema": "WholesalePricing", "description": "Master meat price list." },
+    "/b2bInvoices/{invoiceId}": { "schema": "B2BInvoice", "description": "B2B specific invoices." },
+    "/b2bDocuments/{docId}": { "schema": "B2BDocument", "description": "B2B contracts and files." }
+  }
+}

@@ -1,0 +1,208 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    /***********************
+     * AUTH HELPERS
+     ***********************/
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isOwner(uid) {
+      return isSignedIn() && request.auth.uid == uid;
+    }
+
+    function userDoc() {
+      return get(/databases/$(database)/documents/users/$(request.auth.uid));
+    }
+
+    function userExists() {
+      return isSignedIn() &&
+             exists(/databases/$(database)/documents/users/$(request.auth.uid));
+    }
+
+    function role() {
+      return userExists() && "role" in userDoc().data
+        ? userDoc().data.role
+        : "";
+    }
+
+    /***********************
+     * SUPER ADMIN OVERRIDE
+     ***********************/
+    function isSuperAdminByEmail() {
+      return isSignedIn() &&
+             "email" in request.auth.token &&
+             (request.auth.token.email.lower() == "tugbobodare4@gmail.com" ||
+              request.auth.token.email == "Tugbobodare4@gmail.com");
+    }
+
+    function isSuperAdmin() {
+      return isSuperAdminByEmail() ||
+             role() == "super_admin";
+    }
+
+    function hasPermission(permission) {
+      return isSuperAdmin() || (
+        userExists() &&
+        "permissions" in userDoc().data &&
+        userDoc().data.permissions is list &&
+        userDoc().data.permissions.hasAny([permission])
+      );
+    }
+
+    function isAdmin() {
+      return hasPermission('dashboard.view');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    /***********************
+     * USER PROFILES
+     ***********************/
+    match /users/{uid} {
+      // User can ALWAYS read own profile or find it by email during migration
+      allow read: if isOwner(uid) || hasPermission('users.view') || (isSignedIn() && "email" in resource.data && "email" in request.auth.token && resource.data.email == request.auth.token.email);
+
+      // User creates own profile
+      allow create: if isOwner(uid) || hasPermission('users.create');
+
+      // User edits safe fields
+      allow update: if
+        (
+          isOwner(uid) &&
+          incoming().diff(existing()).affectedKeys().hasOnly([
+            "displayName",
+            "phoneNumber",
+            "address",
+            "photoURL",
+            "lastLogin"
+          ])
+        )
+        ||
+        (
+          hasPermission('users.edit') &&
+          // Cannot modify Super Admin account
+          "email" in existing() &&
+          existing().email != "Tugbobodare4@gmail.com" &&
+          // Non-super-admins cannot modify admin accounts
+          (isSuperAdmin() || ("role" in existing() && existing().role != "admin" && existing().role != "super_admin"))
+        );
+
+      allow delete: if isSuperAdmin() || (hasPermission('users.delete') && (isSuperAdmin() || ("role" in existing() && existing().role != "admin" && existing().role != "super_admin")));
+    }
+
+    /***********************
+     * PUBLIC CONTENT
+     ***********************/
+    match /opportunities/{id} {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+
+    match /investmentPackages/{id} {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+
+    /***********************
+     * LIVESTOCK
+     ***********************/
+    match /livestock/{id} {
+      allow read: if isSignedIn();
+      allow write: if isAdmin();
+    }
+
+    /***********************
+     * INVESTMENT
+     ***********************/
+    match /consultationRequests/{id} {
+      allow create: if true;
+      allow read: if (isSignedIn() && (resource.data.userId == request.auth.uid || resource.data.investorId == request.auth.uid)) || isAdmin();
+      allow update, delete: if isAdmin();
+    }
+
+    match /paymentReceipts/{id} {
+      allow create: if isSignedIn();
+      allow read: if (isSignedIn() && resource.data.investorId == request.auth.uid) || isAdmin();
+      allow update, delete: if isAdmin();
+    }
+
+    match /deliveryRequests/{id} {
+      allow create: if isSignedIn();
+      allow read: if (isSignedIn() && resource.data.investorId == request.auth.uid) || isAdmin();
+      allow update, delete: if isAdmin();
+    }
+
+    match /invoices/{id} {
+      allow read: if (isSignedIn() && resource.data.investorId == request.auth.uid) || isAdmin();
+      allow write: if isAdmin();
+    }
+
+    /***********************
+     * OPPORTUNITY APPLICATIONS
+     ***********************/
+    match /opportunityApplications/{id} {
+      allow create: if isSignedIn();
+      allow read: if (isSignedIn() && resource.data.custodianId == request.auth.uid) || isAdmin();
+      allow update, delete: if isAdmin();
+    }
+
+    /***********************
+     * ANNOUNCEMENTS
+     ***********************/
+    match /announcements/{id} {
+      allow read: if isSignedIn();
+      allow write: if isAdmin();
+    }
+
+    /***********************
+     * ACTIVITY LOGS
+     ***********************/
+    match /activityLogs/{id} {
+      allow read, create: if isAdmin();
+      allow update, delete: if false;
+    }
+
+    /***********************
+     * SETTINGS
+     ***********************/
+    match /settings/{id} {
+      allow read: if true;
+      allow write: if isSuperAdmin();
+    }
+
+    /***********************
+     * GENERAL INQUIRIES
+     ***********************/
+    match /generalInquiries/{id} {
+      allow create: if true; // Public contact form
+      allow read, update, delete: if isAdmin();
+    }
+
+    /***********************
+     * NOTIFICATIONS
+     ***********************/
+    match /notifications/{id} {
+      allow read: if isSignedIn() && (resource.data.userId == request.auth.uid || isAdmin());
+      allow create: if isSignedIn() && (request.resource.data.userId == request.auth.uid || isAdmin());
+      allow update: if isSignedIn() && resource.data.userId == request.auth.uid;
+      allow delete: if isSignedIn() && (resource.data.userId == request.auth.uid || isSuperAdmin());
+    }
+
+    /***********************
+     * DENY EVERYTHING ELSE
+     ***********************/
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

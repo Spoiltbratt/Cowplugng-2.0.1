@@ -1,0 +1,6 @@
+{
+  "name": "CowPlugNG 2.0",
+  "description": "Modern livestock management platform for ownership, professional farm management, and workforce coordination.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
