@@ -36,6 +36,14 @@
     <meta name="mobile-web-app-capable" content="yes" />
     <meta name="msapplication-TileColor" content="#064e3b" />
     <meta name="msapplication-tap-highlight" content="no" />
+    <script>
+    window.__pwaPrompt = null;
+    window.addEventListener('beforeinstallprompt', function (e) {
+      e.preventDefault();
+      window.__pwaPrompt = e;
+      window.dispatchEvent(new Event('pwa-prompt-ready'));
+    });
+    </script>
   </head>
   <body>
     <div id="root"></div>

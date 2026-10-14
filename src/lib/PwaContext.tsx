@@ -23,7 +23,7 @@ interface PwaContextType {
 const PwaContext = createContext<PwaContextType | undefined>(undefined);
 
 export const PwaProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  const [deferredPrompt, setDeferredPrompt] = useState<BeforeInstallPromptEvent | null>(null);
+  const [deferredPrompt, setDeferredPrompt] = useState<BeforeInstallPromptEvent | null>(() => (window as any).__pwaPrompt || null);
   const [isStandalone, setIsStandalone] = useState(false);
   const [isInstalled, setIsInstalled] = useState(false);
   const [isIOS, setIsIOS] = useState(false);
@@ -143,46 +143,60 @@ export const PwaProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
   }, []);
 
-  // 3. Listen to beforeinstallprompt and appinstalled events
+  // 3. Listen to beforeinstallprompt, pwa-prompt-ready, and appinstalled events
   useEffect(() => {
+    const handlePromptReady = () => {
+      if ((window as any).__pwaPrompt) {
+        setDeferredPrompt((window as any).__pwaPrompt);
+      }
+    };
+
     const handleBeforeInstallPrompt = (e: Event) => {
       // Prevent browser's default automatic mini-infobar
       e.preventDefault();
       console.log('[PWA] beforeinstallprompt captured');
+      (window as any).__pwaPrompt = e;
       setDeferredPrompt(e as BeforeInstallPromptEvent);
     };
 
     const handleAppInstalled = () => {
       console.log('[PWA] CowPlug NG installed successfully');
+      (window as any).__pwaPrompt = null;
       setDeferredPrompt(null);
       setIsInstalled(true);
       setShowInstallModal(false);
       localStorage.setItem('cowplug_pwa_installed', 'true');
     };
 
+    window.addEventListener('pwa-prompt-ready', handlePromptReady);
     window.addEventListener('beforeinstallprompt', handleBeforeInstallPrompt);
     window.addEventListener('appinstalled', handleAppInstalled);
 
     return () => {
+      window.removeEventListener('pwa-prompt-ready', handlePromptReady);
       window.removeEventListener('beforeinstallprompt', handleBeforeInstallPrompt);
       window.removeEventListener('appinstalled', handleAppInstalled);
     };
   }, []);
 
   // 4. Prompt Install Trigger
-  const promptInstall = useCallback(async () => {
+  const promptInstall = useCallback(() => {
     // If native prompt is available (e.g. Android Chrome, Desktop Chrome/Edge)
     if (deferredPrompt) {
       try {
-        await deferredPrompt.prompt();
-        const choice = await deferredPrompt.userChoice;
-        console.log('[PWA] User response to install prompt:', choice.outcome);
-        if (choice.outcome === 'accepted') {
-          setIsInstalled(true);
-          localStorage.setItem('cowplug_pwa_installed', 'true');
-        }
-        setDeferredPrompt(null);
-        setShowInstallModal(false);
+        deferredPrompt.prompt();
+        deferredPrompt.userChoice.then((choice) => {
+          console.log('[PWA] User response to install prompt:', choice.outcome);
+          if (choice.outcome === 'accepted') {
+            setIsInstalled(true);
+            localStorage.setItem('cowplug_pwa_installed', 'true');
+          }
+          setDeferredPrompt((window as any).__pwaPrompt = null);
+          setShowInstallModal(false);
+        }).catch((err) => {
+          console.error('[PWA] Error in userChoice:', err);
+          setShowInstallModal(true);
+        });
       } catch (err) {
         console.error('[PWA] Error calling install prompt:', err);
         setShowInstallModal(true);

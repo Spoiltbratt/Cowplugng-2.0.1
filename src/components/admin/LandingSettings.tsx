@@ -10,8 +10,9 @@ import { db, handleFirestoreError, OperationType, logActivity } from '../../lib/
 import { doc, getDoc, setDoc, collection, onSnapshot } from 'firebase/firestore';
 import { Livestock } from '../../types';
 import { Card, Button, Input, Badge } from '../UI';
-import { cn } from '../../lib/utils';
+import { cn, formatWeight } from '../../lib/utils';
 import { useAuth } from '../../lib/AuthContext';
+import fallbackFarmImg from '../../assets/images/brahman_cow_pasture_1785745135569.jpg';
 
 export interface PackageSettingItem {
   id?: string;
@@ -132,6 +133,9 @@ export const LandingSettings: React.FC = () => {
   const [newBadge, setNewBadge] = useState('');
   const [searchFilter, setSearchFilter] = useState('');
 
+  const [removedMissingCount, setRemovedMissingCount] = useState<number | null>(null);
+  const cleanedMissingRef = React.useRef(false);
+
   const firstSelectedLivestock = React.useMemo(() => {
     if (landingSettings.selectedLivestockIds.length > 0) {
       return allLivestock.find(ls => ls.id === landingSettings.selectedLivestockIds[0]);
@@ -139,7 +143,7 @@ export const LandingSettings: React.FC = () => {
     return null;
   }, [allLivestock, landingSettings.selectedLivestockIds]);
 
-  const previewImage = firstSelectedLivestock?.photos?.[0] || firstSelectedLivestock?.livestockImageUrl || landingSettings.heroCustomImageUrl || "/src/assets/images/brahman_cow_pasture_1785745135569.jpg";
+  const previewImage = firstSelectedLivestock?.photos?.[0] || firstSelectedLivestock?.livestockImageUrl || landingSettings.heroCustomImageUrl || fallbackFarmImg;
 
   // Realtime fetch landing settings
   useEffect(() => {
@@ -176,6 +180,29 @@ export const LandingSettings: React.FC = () => {
 
     return () => unsub();
   }, []);
+
+  // Silently remove selected IDs that no longer exist when admin loads settings
+  useEffect(() => {
+    if (!loading && allLivestock.length > 0 && !cleanedMissingRef.current) {
+      if (landingSettings.selectedLivestockIds && landingSettings.selectedLivestockIds.length > 0) {
+        const existingIds = new Set(allLivestock.map(ls => ls.id));
+        const validIds = landingSettings.selectedLivestockIds.filter(id => existingIds.has(id));
+        const missingCount = landingSettings.selectedLivestockIds.length - validIds.length;
+        if (missingCount > 0) {
+          cleanedMissingRef.current = true;
+          setLandingSettings(prev => ({
+            ...prev,
+            selectedLivestockIds: validIds
+          }));
+          setRemovedMissingCount(missingCount);
+        } else {
+          cleanedMissingRef.current = true;
+        }
+      } else {
+        cleanedMissingRef.current = true;
+      }
+    }
+  }, [loading, allLivestock, landingSettings.selectedLivestockIds]);
 
   const handleSave = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -349,6 +376,25 @@ export const LandingSettings: React.FC = () => {
         {/* SECTION 1: Featured Livestock Showcase Picker */}
         <Card title="Featured Livestock Selection for Hero Showcase" icon={Cow} className="border-slate-100 shadow-sm">
           <div className="space-y-6">
+            {/* Yellow note when selected animals no longer exist */}
+            {removedMissingCount !== null && removedMissingCount > 0 && (
+              <div className="p-3.5 bg-amber-50 border border-amber-200 text-amber-900 rounded-2xl text-xs font-bold flex items-center justify-between animate-in fade-in">
+                <span>{removedMissingCount} selected animals no longer exist and were removed</span>
+                <button 
+                  type="button" 
+                  onClick={() => setRemovedMissingCount(null)} 
+                  className="text-amber-700 hover:text-amber-900 cursor-pointer p-1"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+            )}
+
+            {/* Helper line above picker */}
+            <p className="text-xs text-emerald-800 font-bold bg-emerald-50/80 border border-emerald-100 p-3 rounded-xl">
+              If you pick nothing, the page automatically shows up to 8 healthy, available animals with photos.
+            </p>
+
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 bg-emerald-50/60 p-4 rounded-2xl border border-emerald-100">
               <div>
                 <p className="text-sm font-black text-slate-900">Select Livestock to Display</p>
@@ -389,7 +435,7 @@ export const LandingSettings: React.FC = () => {
               ) : (
                 filteredLivestockList.map((ls) => {
                   const isSelected = landingSettings.selectedLivestockIds.includes(ls.id);
-                  const img = ls.photos?.[0] || ls.livestockImageUrl || "/src/assets/images/brahman_cow_pasture_1785745135569.jpg";
+                  const img = ls.photos?.[0] || ls.livestockImageUrl || fallbackFarmImg;
 
                   return (
                     <div
@@ -422,7 +468,7 @@ export const LandingSettings: React.FC = () => {
                           </span>
                         </div>
                         <p className="text-xs text-slate-600 font-bold truncate">{ls.breed} ({ls.investmentPackage || 'Livestock'})</p>
-                        <p className="text-[10px] text-slate-400 font-medium">{ls.weight}kg • Health: {ls.healthStatus || 'Good'}</p>
+                        <p className="text-[10px] text-slate-400 font-medium">{formatWeight(ls.weight)} • Health: {ls.healthStatus || 'Good'}</p>
                       </div>
 
                       <div className={cn(
@@ -867,7 +913,7 @@ export const LandingSettings: React.FC = () => {
                 {firstSelectedLivestock ? (
                   <>
                     <img 
-                      src={firstSelectedLivestock.photos?.[0] || firstSelectedLivestock.livestockImageUrl || landingSettings.heroCustomImageUrl || "/src/assets/images/brahman_cow_pasture_1785745135569.jpg"} 
+                      src={firstSelectedLivestock.photos?.[0] || firstSelectedLivestock.livestockImageUrl || landingSettings.heroCustomImageUrl || fallbackFarmImg} 
                       alt="Preview Hero"
                       className="w-full h-full object-cover absolute inset-0"
                       referrerPolicy="no-referrer"
@@ -878,7 +924,7 @@ export const LandingSettings: React.FC = () => {
                         {firstSelectedLivestock.tagNumber || firstSelectedLivestock.breed}
                       </p>
                       <p className="text-[10px] text-white/80">
-                        {landingSettings.selectedLivestockIds.length} Livestock Selected for Landing Page
+                        {formatWeight(firstSelectedLivestock.weight)} • {firstSelectedLivestock.breed} ({landingSettings.selectedLivestockIds.length} Livestock Selected)
                       </p>
                     </div>
                   </>

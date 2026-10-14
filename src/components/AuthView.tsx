@@ -6,7 +6,9 @@ import {
   sendPasswordResetEmail,
   sendEmailVerification,
   GoogleAuthProvider,
-  signInWithPopup
+  signInWithPopup,
+  signInWithRedirect,
+  getRedirectResult
 } from 'firebase/auth';
 import { doc, setDoc, getDoc } from 'firebase/firestore';
 import { auth, db, notifyAdmins, logActivity } from '../lib/firebase';
@@ -57,6 +59,28 @@ export const AuthView: React.FC<AuthViewProps> = ({ onBack }) => {
       }
     };
     checkSettings();
+  }, []);
+
+  React.useEffect(() => {
+    getRedirectResult(auth)
+      .then(async (result) => {
+        if (result && result.user) {
+          setLoading(true);
+          try {
+            await handleGoogleUser(result.user);
+          } catch (err: any) {
+            console.error("Redirect result error:", err);
+            const hostname = window.location.hostname;
+            const code = err.code || 'unknown';
+            setError(`${err.message || "Failed to authenticate with Google."}\nCode: ${code} | Hostname: ${hostname}`);
+          } finally {
+            setLoading(false);
+          }
+        }
+      })
+      .catch((err) => {
+        console.error("Get redirect result error:", err);
+      });
   }, []);
 
   const [formData, setFormData] = useState({
@@ -164,74 +188,100 @@ export const AuthView: React.FC<AuthViewProps> = ({ onBack }) => {
     }
   };
 
+  const handleGoogleUser = async (user: any) => {
+    const userDocRef = doc(db, 'users', user.uid);
+    const userDoc = await getDoc(userDocRef);
+
+    if (userDoc.exists()) {
+      await logActivity(
+        user.uid,
+        user.displayName || user.email || 'User',
+        'GOOGLE_LOGIN',
+        'AUTH',
+        user.uid,
+        `User logged in via Google Authentication`
+      );
+    } else {
+      const emailLower = user.email?.toLowerCase() || '';
+      let roleToAssign = UserRole.INVESTOR;
+      if (emailLower === 'tugbobodare4@gmail.com') {
+        roleToAssign = UserRole.SUPER_ADMIN;
+      }
+
+      const newProfile = {
+        uid: user.uid,
+        email: user.email || '',
+        displayName: user.displayName || user.email?.split('@')[0] || 'User',
+        name: user.displayName || user.email?.split('@')[0] || 'User',
+        role: roleToAssign,
+        status: 'active',
+        accountStatus: 'active',
+        isVerified: roleToAssign === UserRole.SUPER_ADMIN,
+        verificationStatus: roleToAssign === UserRole.SUPER_ADMIN ? VerificationStatus.APPROVED : VerificationStatus.NOT_STARTED,
+        createdAt: Date.now(),
+        investorId: roleToAssign === UserRole.INVESTOR ? `INV-${Math.floor(1000 + Math.random() * 9000)}` : null,
+      };
+
+      await setDoc(userDocRef, newProfile);
+      await logActivity(
+        user.uid,
+        newProfile.displayName,
+        'GOOGLE_REGISTER',
+        'AUTH',
+        user.uid,
+        `New user registered via Google Auth as ${roleToAssign}`
+      );
+
+      await notifyAdmins(
+        'New Google Investor Registration',
+        `${newProfile.displayName} registered via Google as ${roleToAssign}.`,
+        'Security Alerts',
+        'INFO'
+      );
+    }
+  };
+
   const handleGoogleSignIn = async () => {
     setLoading(true);
     setError(null);
+    const provider = new GoogleAuthProvider();
+    provider.setCustomParameters({ prompt: 'select_account' });
     try {
-      const provider = new GoogleAuthProvider();
-      provider.setCustomParameters({ prompt: 'select_account' });
-      const userCredential = await signInWithPopup(auth, provider);
-      const user = userCredential.user;
-
-      const userDocRef = doc(db, 'users', user.uid);
-      const userDoc = await getDoc(userDocRef);
-
-      if (userDoc.exists()) {
-        await logActivity(
-          user.uid,
-          user.displayName || user.email || 'User',
-          'GOOGLE_LOGIN',
-          'AUTH',
-          user.uid,
-          `User logged in via Google Authentication`
-        );
-      } else {
-        const emailLower = user.email?.toLowerCase() || '';
-        let roleToAssign = UserRole.INVESTOR;
-        if (emailLower === 'tugbobodare4@gmail.com') {
-          roleToAssign = UserRole.SUPER_ADMIN;
-        }
-
-        const newProfile = {
-          uid: user.uid,
-          email: user.email || '',
-          displayName: user.displayName || user.email?.split('@')[0] || 'User',
-          name: user.displayName || user.email?.split('@')[0] || 'User',
-          role: roleToAssign,
-          status: 'active',
-          accountStatus: 'active',
-          isVerified: roleToAssign === UserRole.SUPER_ADMIN,
-          verificationStatus: roleToAssign === UserRole.SUPER_ADMIN ? VerificationStatus.APPROVED : VerificationStatus.NOT_STARTED,
-          createdAt: Date.now(),
-          investorId: roleToAssign === UserRole.INVESTOR ? `INV-${Math.floor(1000 + Math.random() * 9000)}` : null,
-        };
-
-        await setDoc(userDocRef, newProfile);
-        await logActivity(
-          user.uid,
-          newProfile.displayName,
-          'GOOGLE_REGISTER',
-          'AUTH',
-          user.uid,
-          `New user registered via Google Auth as ${roleToAssign}`
-        );
-
-        await notifyAdmins(
-          'New Google Investor Registration',
-          `${newProfile.displayName} registered via Google as ${roleToAssign}.`,
-          'Security Alerts',
-          'INFO'
-        );
+      const isStandalone = window.matchMedia('(display-mode: standalone)').matches || (window.navigator as any).standalone;
+      if (isStandalone) {
+        await signInWithRedirect(auth, provider);
+        return;
       }
+      const userCredential = await signInWithPopup(auth, provider);
+      await handleGoogleUser(userCredential.user);
     } catch (err: any) {
       console.error("Google Authentication error:", err);
-      if (err.code === 'auth/popup-closed-by-user') {
-        setError("Sign-in popup was closed before completion.");
-      } else if (err.code === 'auth/account-exists-with-different-credential') {
-        setError("An account already exists with the same email address using a different sign-in method.");
-      } else {
-        setError(err.message || "Failed to authenticate with Google.");
+      const hostname = window.location.hostname;
+      const code = err.code || 'unknown';
+
+      if (err.code === 'auth/popup-blocked' || err.code === 'auth/cancelled-popup-request' || err.code === 'auth/web-storage-unsupported') {
+        try {
+          await signInWithRedirect(auth, provider);
+          return;
+        } catch (redirectErr: any) {
+          console.error("Redirect retry error:", redirectErr);
+        }
       }
+
+      let msg = "Failed to authenticate with Google.";
+      if (err.code === 'auth/unauthorized-domain') {
+        msg = `This website address is not authorised for Google sign-in. Add ${hostname} under Firebase, Authentication, Settings, Authorized domains.`;
+      } else if (err.code === 'auth/operation-not-allowed') {
+        msg = "Google sign-in is not enabled in Firebase.";
+      } else if (err.code === 'auth/network-request-failed') {
+        msg = "Network problem. Check your connection and try again.";
+      } else if (err.code === 'auth/popup-closed-by-user') {
+        msg = "Sign-in popup was closed before completion.";
+      } else if (err.message) {
+        msg = err.message;
+      }
+
+      setError(`${msg}\nCode: ${code} | Hostname: ${hostname}`);
     } finally {
       setLoading(false);
     }

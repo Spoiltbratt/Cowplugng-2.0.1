@@ -146,89 +146,96 @@ export const PwaInstallModal: React.FC = () => {
             </div>
 
             {/* Platform-Specific Installation Steps */}
-            {isIOS ? (
-              /* iOS / Safari Step-by-Step Instructions */
-              <div className="bg-emerald-50/60 border border-emerald-200/80 rounded-2xl p-4 sm:p-5 space-y-3.5">
-                <div className="flex items-center gap-2">
-                  <span className="w-2 h-2 rounded-full bg-emerald-600 animate-pulse" />
-                  <h4 className="text-xs font-black uppercase tracking-wider text-emerald-900">
-                    How to install on iPhone & iPad (Safari)
-                  </h4>
-                </div>
+            {(() => {
+              const ua = window.navigator.userAgent.toLowerCase();
+              const isInApp = /fban|fbios|instagram|tiktok|snapchat|twitter|linkedin/i.test(ua);
 
-                <div className="space-y-3 text-left">
-                  <div className="flex items-start gap-3 bg-white p-3 rounded-xl border border-emerald-100/80 shadow-xs">
-                    <div className="w-7 h-7 rounded-lg bg-emerald-100 text-emerald-800 font-black text-xs flex items-center justify-center shrink-0">
-                      1
+              if (isIOS) {
+                return (
+                  <div className="bg-emerald-50/60 border border-emerald-200/80 rounded-2xl p-4 sm:p-5 space-y-3.5">
+                    <div className="flex items-center gap-2">
+                      <span className="w-2 h-2 rounded-full bg-emerald-600 animate-pulse" />
+                      <h4 className="text-xs font-black uppercase tracking-wider text-emerald-900">
+                        How to install on iPhone & iPad (Safari)
+                      </h4>
                     </div>
-                    <div className="text-xs text-slate-700 leading-relaxed">
-                      Tap the <strong className="text-slate-900 font-bold inline-flex items-center gap-1 mx-1 px-1.5 py-0.5 bg-slate-100 rounded border border-slate-200"><Share2 className="w-3.5 h-3.5 text-blue-600" /> Share</strong> icon in your Safari toolbar at the bottom.
+
+                    <div className="space-y-3 text-left">
+                      <div className="flex items-start gap-3 bg-white p-3 rounded-xl border border-emerald-100/80 shadow-xs">
+                        <div className="w-7 h-7 rounded-lg bg-emerald-100 text-emerald-800 font-black text-xs flex items-center justify-center shrink-0">
+                          1
+                        </div>
+                        <div className="text-xs text-slate-700 leading-relaxed">
+                          Tap the <strong className="text-slate-900 font-bold inline-flex items-center gap-1 mx-1 px-1.5 py-0.5 bg-slate-100 rounded border border-slate-200"><Share2 className="w-3.5 h-3.5 text-blue-600" /> Share</strong> button in Safari.
+                        </div>
+                      </div>
+
+                      <div className="flex items-start gap-3 bg-white p-3 rounded-xl border border-emerald-100/80 shadow-xs">
+                        <div className="w-7 h-7 rounded-lg bg-emerald-100 text-emerald-800 font-black text-xs flex items-center justify-center shrink-0">
+                          2
+                        </div>
+                        <div className="text-xs text-slate-700 leading-relaxed">
+                          Tap <strong className="text-slate-900 font-bold inline-flex items-center gap-1 mx-1 px-1.5 py-0.5 bg-slate-100 rounded border border-slate-200"><PlusSquare className="w-3.5 h-3.5 text-emerald-700" /> Add to Home Screen</strong>.
+                        </div>
+                      </div>
+
+                      <div className="flex items-start gap-3 bg-white p-3 rounded-xl border border-emerald-100/80 shadow-xs">
+                        <div className="w-7 h-7 rounded-lg bg-emerald-100 text-emerald-800 font-black text-xs flex items-center justify-center shrink-0">
+                          3
+                        </div>
+                        <div className="text-xs text-slate-700 leading-relaxed">
+                          Tap <strong className="text-slate-900 font-bold mx-1">Add</strong>.
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="pt-1 text-center">
+                      <Button
+                        onClick={closeInstallModal}
+                        className="w-full h-12 rounded-xl bg-emerald-800 hover:bg-emerald-900 text-white font-bold text-sm shadow-md"
+                      >
+                        Got It, Thank You
+                      </Button>
                     </div>
                   </div>
-
-                  <div className="flex items-start gap-3 bg-white p-3 rounded-xl border border-emerald-100/80 shadow-xs">
-                    <div className="w-7 h-7 rounded-lg bg-emerald-100 text-emerald-800 font-black text-xs flex items-center justify-center shrink-0">
-                      2
-                    </div>
-                    <div className="text-xs text-slate-700 leading-relaxed">
-                      Scroll down and select <strong className="text-slate-900 font-bold inline-flex items-center gap-1 mx-1 px-1.5 py-0.5 bg-slate-100 rounded border border-slate-200"><PlusSquare className="w-3.5 h-3.5 text-emerald-700" /> Add to Home Screen</strong>.
-                    </div>
+                );
+              } else if (isInApp) {
+                return (
+                  <div className="bg-blue-50/80 border border-blue-200/80 rounded-2xl p-4 sm:p-5 space-y-3.5 text-center">
+                    <p className="text-xs font-bold text-blue-900 leading-relaxed">
+                      Open this page in Chrome or Safari to install
+                    </p>
+                    <Button
+                      onClick={() => {
+                        navigator.clipboard.writeText(window.location.href);
+                        alert("Link copied to clipboard!");
+                      }}
+                      className="w-full h-12 rounded-xl bg-blue-600 hover:bg-blue-700 text-white font-bold text-xs flex items-center justify-center gap-2 shadow-md"
+                    >
+                      <ExternalLink className="w-4 h-4" />
+                      <span>Copy link</span>
+                    </Button>
                   </div>
-
-                  <div className="flex items-start gap-3 bg-white p-3 rounded-xl border border-emerald-100/80 shadow-xs">
-                    <div className="w-7 h-7 rounded-lg bg-emerald-100 text-emerald-800 font-black text-xs flex items-center justify-center shrink-0">
-                      3
-                    </div>
-                    <div className="text-xs text-slate-700 leading-relaxed">
-                      Tap <strong className="text-slate-900 font-bold mx-1">Add</strong> in the top right corner. {brandDisplayName} will now appear on your home screen!
-                    </div>
+                );
+              } else {
+                return (
+                  <div className="bg-amber-50/80 border border-amber-200/80 rounded-2xl p-4 sm:p-5 space-y-3.5 text-center">
+                    <p className="text-xs font-bold text-amber-900 leading-relaxed">
+                      Getting the installer ready. Tap Download again in a few seconds.
+                    </p>
+                    <p className="text-[11px] text-amber-800">
+                      Browser menu, then Install app.
+                    </p>
+                    <Button
+                      onClick={promptInstall}
+                      className="w-full h-12 rounded-xl bg-amber-700 hover:bg-amber-800 text-white font-bold text-xs shadow-md"
+                    >
+                      Tap Download Again
+                    </Button>
                   </div>
-                </div>
-
-                <div className="pt-1 text-center">
-                  <Button
-                    onClick={closeInstallModal}
-                    className="w-full h-12 rounded-xl bg-emerald-800 hover:bg-emerald-900 text-white font-bold text-sm shadow-md"
-                  >
-                    Got It, Thank You
-                  </Button>
-                </div>
-              </div>
-            ) : isNativePromptSupported ? (
-              /* Android / Desktop Chrome / Edge Native One-Click Install */
-              <div className="space-y-3 pt-1">
-                <Button
-                  onClick={promptInstall}
-                  className="w-full h-14 rounded-2xl bg-emerald-700 hover:bg-emerald-800 text-white text-base font-black shadow-xl shadow-emerald-700/25 flex items-center justify-center gap-3 group cursor-pointer"
-                >
-                  <Download className="w-5 h-5 group-hover:-translate-y-0.5 transition-transform" />
-                  <span>Install {brandDisplayName} Now</span>
-                </Button>
-                <p className="text-center text-[11px] font-medium text-slate-400">
-                  No app store download required • Safe & light on storage
-                </p>
-              </div>
-            ) : (
-              /* General browser manual guide */
-              <div className="bg-slate-50 border border-slate-200/80 rounded-2xl p-4 sm:p-5 space-y-3">
-                <div className="flex items-center gap-2">
-                  <span className="w-2 h-2 rounded-full bg-emerald-600" />
-                  <h4 className="text-xs font-black uppercase tracking-wider text-slate-800">
-                    Add to Your Home Screen or Desktop
-                  </h4>
-                </div>
-                <p className="text-xs text-slate-600 leading-relaxed">
-                  Open your browser menu (<strong className="text-slate-800">⋮</strong> or Settings) and select <strong className="text-slate-800">"Install {brandDisplayName}"</strong> or <strong className="text-slate-800">"Add to Home Screen"</strong>.
-                </p>
-                <Button
-                  onClick={closeInstallModal}
-                  variant="outline"
-                  className="w-full h-11 rounded-xl text-xs font-bold"
-                >
-                  Close
-                </Button>
-              </div>
-            )}
+                );
+              }
+            })()}
           </div>
         </motion.div>
       </div>

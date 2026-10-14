@@ -31,19 +31,22 @@ import {
   Award,
   Globe,
   Clock,
-  Check
+  Check,
+  Download
 } from 'lucide-react';
 import { CowIcon as Cow } from './CowIcon';
 import { motion, AnimatePresence } from 'motion/react';
 import { db } from '../lib/firebase';
 import { collection, query, onSnapshot, orderBy, limit, where, addDoc, doc } from 'firebase/firestore';
-import { Opportunity, Livestock } from '../types';
+import { Opportunity, Livestock, UserRole } from '../types';
 import { Button, Input, Card, Badge } from './UI';
-import { cn, formatDate } from '../lib/utils';
+import { cn, formatDate, formatWeight } from '../lib/utils';
 import { useAuth } from '../lib/AuthContext';
+import { usePwa } from '../lib/PwaContext';
 import { LandingSettingsData } from './admin/LandingSettings';
 import { BrandLogo } from './BrandLogo';
 import { PwaInstallButton } from './pwa/PwaInstallButton';
+import fallbackFarmImg from '../assets/images/brahman_cow_pasture_1785745135569.jpg';
 
 interface LandingPageProps {
   onLogin: () => void;
@@ -51,6 +54,7 @@ interface LandingPageProps {
 
 export const LandingPage: React.FC<LandingPageProps> = ({ onLogin }) => {
   const { profile } = useAuth();
+  const { promptInstall, isStandalone, isInstalled } = usePwa();
   const [isMenuOpen, setIsMenuOpen] = useState(false);
   const [opportunities, setOpportunities] = useState<Opportunity[]>([]);
   const [publicLivestock, setPublicLivestock] = useState<Livestock[]>([]);
@@ -115,17 +119,77 @@ export const LandingPage: React.FC<LandingPageProps> = ({ onLogin }) => {
     return () => unsubLanding();
   }, []);
 
-  // Compute effective livestock showcase list based on admin selection in Landing Settings
+  const isAdmin = profile?.role === UserRole.ADMIN || profile?.role === UserRole.SUPER_ADMIN || profile?.role === 'admin' || profile?.role === 'super_admin';
+  const [isPaused, setIsPaused] = useState(false);
+  const touchStartX = React.useRef<number | null>(null);
+
+  // Compute effective livestock showcase list based on admin selection or auto-fill fallback
   const effectiveLivestock = React.useMemo(() => {
+    // 1. Keep admin-picked list in saved order; ignore non-existent IDs
     if (landingSettings.selectedLivestockIds && landingSettings.selectedLivestockIds.length > 0) {
       const selectedMap = new Map(publicLivestock.map(ls => [ls.id, ls]));
       const selected = landingSettings.selectedLivestockIds
         .map(id => selectedMap.get(id))
         .filter((ls): ls is Livestock => !!ls);
-      return selected;
+      if (selected.length > 0) {
+        return selected;
+      }
     }
-    return [];
+
+    // 2. Auto-fill if empty: up to 8 healthy animals with photos, not in history statuses
+    const EXCLUDED_STATUSES = ['SOLD', 'DELIVERED', 'DECEASED', 'TRANSFERRED', 'ARCHIVED', 'RETIRED'];
+    const EXCLUDED_HEALTH = ['POOR', 'CRITICAL', 'SICK'];
+
+    const validAnimals = publicLivestock.filter((animal) => {
+      const hasPhoto = Boolean(animal.photos?.[0] || animal.livestockImageUrl);
+      if (!hasPhoto) return false;
+
+      const status = (animal.status || '').toUpperCase();
+      if (EXCLUDED_STATUSES.includes(status)) return false;
+
+      const health = (animal.healthStatus || '').toUpperCase();
+      if (EXCLUDED_HEALTH.includes(health)) return false;
+
+      return true;
+    });
+
+    // Sort by newest first (createdAt or lastUpdated)
+    validAnimals.sort((a, b) => {
+      const timeA = Number(a.createdAt || a.lastUpdated || 0);
+      const timeB = Number(b.createdAt || b.lastUpdated || 0);
+      return timeB - timeA;
+    });
+
+    return validAnimals.slice(0, 8);
   }, [publicLivestock, landingSettings.selectedLivestockIds]);
+
+  // Auto-rotate showcase every 5 seconds; pause on hover/touch
+  useEffect(() => {
+    if (isPaused || effectiveLivestock.length <= 1) return;
+    const interval = setInterval(() => {
+      setActiveLivestockIndex(prev => (prev + 1) % effectiveLivestock.length);
+    }, 5000);
+    return () => clearInterval(interval);
+  }, [isPaused, effectiveLivestock.length]);
+
+  const handleTouchStart = (e: React.TouchEvent) => {
+    setIsPaused(true);
+    touchStartX.current = e.touches[0].clientX;
+  };
+
+  const handleTouchEnd = (e: React.TouchEvent) => {
+    setIsPaused(false);
+    if (touchStartX.current === null) return;
+    const diff = e.changedTouches[0].clientX - touchStartX.current;
+    touchStartX.current = null;
+    if (diff > 45 && effectiveLivestock.length > 1) {
+      // Swiped right -> previous animal
+      setActiveLivestockIndex(prev => (prev - 1 + effectiveLivestock.length) % effectiveLivestock.length);
+    } else if (diff < -45 && effectiveLivestock.length > 1) {
+      // Swiped left -> next animal
+      setActiveLivestockIndex(prev => (prev + 1) % effectiveLivestock.length);
+    }
+  };
   const [platformSettings, setPlatformSettings] = useState({
     companyName: 'CowPlugNG',
     contactEmail: 'cowplug.ng@gmail.com',
@@ -300,9 +364,16 @@ export const LandingPage: React.FC<LandingPageProps> = ({ onLogin }) => {
           <BrandLogo variant="header" onClick={() => scrollTo('hero')} />
 
           <div className="flex items-center gap-3">
-            <Button onClick={onLogin} variant="primary" className="hidden sm:flex h-10 sm:h-11 px-5 sm:px-8 rounded-full font-bold shadow-xl shadow-brand-green/20 text-xs sm:text-sm">
-              Get Started
-            </Button>
+            {!isStandalone && !isInstalled ? (
+              <Button onClick={promptInstall} variant="primary" className="h-10 sm:h-11 px-4 sm:px-6 rounded-full font-bold shadow-xl shadow-brand-green/20 text-xs sm:text-sm flex items-center gap-2">
+                <Download className="w-4 h-4" />
+                <span>Download App</span>
+              </Button>
+            ) : isInstalled ? (
+              <span className="hidden sm:inline-block text-[11px] font-bold text-emerald-700 bg-emerald-50 px-3 py-1.5 rounded-full border border-emerald-200">
+                App installed. Open CowPlug NG from your home screen.
+              </span>
+            ) : null}
             <button 
               className="text-slate-900 p-2 ml-1 rounded-xl hover:bg-slate-100 transition-colors cursor-pointer" 
               onClick={() => setIsMenuOpen(!isMenuOpen)}
@@ -360,6 +431,7 @@ export const LandingPage: React.FC<LandingPageProps> = ({ onLogin }) => {
                     className="w-full"
                     onClickCustom={() => {
                       setIsMenuOpen(false);
+                      promptInstall();
                     }}
                   />
                 </div>
@@ -392,10 +464,17 @@ export const LandingPage: React.FC<LandingPageProps> = ({ onLogin }) => {
             </div>
             
             <div className="flex flex-col sm:flex-row gap-5 pt-4">
-              <Button size="lg" className="h-16 px-10 rounded-2xl text-lg font-bold shadow-2xl shadow-brand-green/30" onClick={onLogin}>
-                {landingSettings.heroPrimaryButtonText}
-                <ArrowRight className="w-5 h-5 ml-2" />
-              </Button>
+              {!isStandalone && !isInstalled ? (
+                <Button size="lg" className="h-16 px-10 rounded-2xl text-lg font-bold shadow-2xl shadow-brand-green/30 flex items-center justify-center gap-3" onClick={promptInstall}>
+                  <Download className="w-6 h-6" />
+                  <span>Download App</span>
+                </Button>
+              ) : (
+                <div className="p-4 bg-emerald-50 border border-emerald-200 rounded-2xl text-emerald-900 font-bold text-sm flex items-center gap-3">
+                  <CheckCircle2 className="w-5 h-5 text-emerald-600 shrink-0" />
+                  <span>App installed. Open CowPlug NG from your home screen.</span>
+                </div>
+              )}
               <Button variant="outline" size="lg" className="h-16 px-10 rounded-2xl text-lg font-bold border-2 border-slate-200 hover:border-brand-green hover:bg-brand-green/5" onClick={() => scrollTo('packages')}>
                 {landingSettings.heroSecondaryButtonText}
               </Button>
@@ -422,112 +501,169 @@ export const LandingPage: React.FC<LandingPageProps> = ({ onLogin }) => {
             <div className="absolute -inset-4 bg-brand-gold/5 blur-3xl rounded-[3rem] -rotate-3" />
             <div 
               className={cn(
-                "relative rounded-[3rem] overflow-hidden border-8 border-white shadow-[0_32px_64px_-16px_rgba(0,0,0,0.15)] aspect-[4/5] sm:aspect-square transition-all duration-500",
+                "relative rounded-[3rem] overflow-hidden border-8 border-white shadow-[0_32px_64px_-16px_rgba(0,0,0,0.15)] aspect-[4/5] sm:aspect-square w-full transition-all duration-500",
                 "animate-in fade-in zoom-in-95 duration-500"
               )}
-              key={effectiveLivestock[activeLivestockIndex % effectiveLivestock.length]?.id}
+              onMouseEnter={() => setIsPaused(true)}
+              onMouseLeave={() => setIsPaused(false)}
+              onTouchStart={handleTouchStart}
+              onTouchEnd={handleTouchEnd}
+              key={effectiveLivestock[activeLivestockIndex % effectiveLivestock.length]?.id || 'fallback-farm'}
             >
+              {effectiveLivestock.length > 0 ? (
+                (() => {
+                  const currentAnimal = effectiveLivestock[activeLivestockIndex % effectiveLivestock.length];
+                  const healthUpper = (currentAnimal.healthStatus || '').toUpperCase();
+                  const safeHealth = (healthUpper === 'GOOD' || healthUpper === 'EXCELLENT' || healthUpper === 'FAIR')
+                    ? (currentAnimal.healthStatus || 'Good')
+                    : 'Vet-checked';
+                  const statusLabel = currentAnimal.ownerId ? 'Placed with an investor' : 'Available';
 
-              {effectiveLivestock.length > 0 && effectiveLivestock[activeLivestockIndex % effectiveLivestock.length] ? (
-                <>
+                  return (
+                    <>
+                      <img 
+                        key={currentAnimal.id}
+                        src={currentAnimal.photos?.[0] || currentAnimal.livestockImageUrl || landingSettings.heroCustomImageUrl || fallbackFarmImg} 
+                        alt={currentAnimal.breed} 
+                        className="w-full h-full object-cover scale-105 hover:scale-100 transition-transform duration-[1s]"
+                        referrerPolicy="no-referrer"
+                      />
+                      <div className="absolute inset-0 bg-gradient-to-t from-black/85 via-black/20 to-transparent" />
+                      
+                      {/* Next / Previous Carousel Arrow Controls */}
+                      {effectiveLivestock.length > 1 && (
+                        <>
+                          <button 
+                            type="button" 
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setActiveLivestockIndex(prev => (prev - 1 + effectiveLivestock.length) % effectiveLivestock.length);
+                            }}
+                            className="absolute left-4 top-1/2 -translate-y-1/2 z-30 w-11 h-11 rounded-full bg-slate-900/60 hover:bg-slate-900/90 backdrop-blur-md text-white border border-white/20 flex items-center justify-center shadow-2xl transition-all hover:scale-110 active:scale-95 cursor-pointer"
+                            title="Previous Livestock"
+                          >
+                            <ChevronLeft className="w-6 h-6" />
+                          </button>
+                          <button 
+                            type="button" 
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setActiveLivestockIndex(prev => (prev + 1) % effectiveLivestock.length);
+                            }}
+                            className="absolute right-4 top-1/2 -translate-y-1/2 z-30 w-11 h-11 rounded-full bg-slate-900/60 hover:bg-slate-900/90 backdrop-blur-md text-white border border-white/20 flex items-center justify-center shadow-2xl transition-all hover:scale-110 active:scale-95 cursor-pointer"
+                            title="Next Livestock"
+                          >
+                            <ChevronRight className="w-6 h-6" />
+                          </button>
+                        </>
+                      )}
+
+                      {/* Safe Selection Dropdown */}
+                      <div className="absolute top-6 right-6 z-20">
+                        <select
+                          className="bg-white/95 backdrop-blur-md text-slate-900 text-xs sm:text-sm font-bold rounded-2xl px-4 py-2.5 sm:py-3 border border-white/40 shadow-2xl cursor-pointer outline-none appearance-none pr-10 relative z-20 max-w-[200px] truncate focus:ring-4 focus:ring-brand-green/20 transition-all duration-300 hover:bg-white"
+                          value={activeLivestockIndex % effectiveLivestock.length}
+                          onChange={(e) => setActiveLivestockIndex(Number(e.target.value))}
+                          style={{ backgroundImage: `url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%230f172a' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E")`, backgroundRepeat: 'no-repeat', backgroundPosition: 'right 0.75rem center' }}
+                        >
+                          {effectiveLivestock.map((ls, idx) => (
+                            <option key={ls.id} value={idx}>
+                              {ls.tagNumber || `Animal #${idx + 1}`} - {ls.breed}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+
+                      {/* Safe Animal Details Overlay */}
+                      <div className="absolute bottom-6 left-6 right-6 sm:bottom-8 sm:left-8 sm:right-8 z-20 space-y-3">
+                        <div className="flex flex-col sm:flex-row sm:items-end justify-between gap-3">
+                          <div className="bg-white/10 backdrop-blur-xl border border-white/20 p-3 sm:p-4 rounded-2xl flex items-center gap-3.5 max-w-full sm:max-w-[75%]">
+                            <div className="w-10 h-10 sm:w-11 sm:h-11 bg-brand-green rounded-xl flex items-center justify-center shrink-0 shadow-md">
+                              <Cow className="w-5 h-5 sm:w-6 sm:h-6 text-white" />
+                            </div>
+                            <div className="min-w-0">
+                              <div className="flex items-center gap-2">
+                                <p className="text-white font-black text-sm sm:text-base leading-none truncate">
+                                  {currentAnimal.tagNumber || 'Livestock Asset'}
+                                </p>
+                                <span className="text-white/80 text-xs font-bold truncate">
+                                  • {currentAnimal.breed}
+                                </span>
+                              </div>
+                              <p className="text-white/80 text-[11px] sm:text-xs font-semibold mt-1 tracking-tight truncate">
+                                {currentAnimal.type || 'Livestock'} • {formatWeight(currentAnimal.weight)} • Health: {safeHealth}
+                              </p>
+                            </div>
+                          </div>
+
+                          <div className="flex items-center sm:items-end shrink-0">
+                            <div className={cn(
+                              "px-3.5 py-1.5 rounded-full font-black text-[10px] sm:text-xs uppercase tracking-wider shadow-lg backdrop-blur-md border",
+                              currentAnimal.ownerId 
+                                ? "bg-amber-500/90 text-white border-amber-400/40" 
+                                : "bg-brand-gold text-slate-900 border-yellow-300/40"
+                            )}>
+                              {statusLabel}
+                            </div>
+                          </div>
+                        </div>
+
+                        {/* Download App to Invest Button */}
+                        <div>
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              promptInstall();
+                            }}
+                            className="inline-flex items-center justify-center gap-2 px-5 py-2.5 rounded-xl bg-brand-green hover:bg-emerald-700 text-white font-black text-xs shadow-xl transition-all duration-300 hover:scale-[1.02] active:scale-[0.98] cursor-pointer"
+                          >
+                            <Download className="w-4 h-4" />
+                            <span>Download App to Invest</span>
+                          </button>
+                        </div>
+                      </div>
+                    </>
+                  );
+                })()
+              ) : (
+                /* FRIENDLY FALLBACK HERO CARD - NEVER SHOWS ADMIN/EMPTY ERROR TO VISITORS */
+                <div className="w-full h-full relative flex flex-col justify-end p-6 sm:p-8">
                   <img 
-                    key={effectiveLivestock[activeLivestockIndex % effectiveLivestock.length].id}
-                    src={effectiveLivestock[activeLivestockIndex % effectiveLivestock.length].photos?.[0] || effectiveLivestock[activeLivestockIndex % effectiveLivestock.length].livestockImageUrl || landingSettings.heroCustomImageUrl || "/src/assets/images/brahman_cow_pasture_1785745135569.jpg"} 
-                    alt={effectiveLivestock[activeLivestockIndex % effectiveLivestock.length].breed} 
-                    className="w-full h-full object-cover scale-105 hover:scale-100 transition-transform duration-[1s]"
+                    src={landingSettings.heroCustomImageUrl || fallbackFarmImg} 
+                    alt="CowPlug Lagos Farm" 
+                    className="w-full h-full object-cover absolute inset-0"
                     referrerPolicy="no-referrer"
                   />
-                  <div className="absolute inset-0 bg-gradient-to-t from-black/85 via-black/20 to-transparent" />
+                  <div className="absolute inset-0 bg-gradient-to-t from-black/85 via-black/30 to-transparent" />
                   
-                  {/* Next / Previous Carousel Arrow Controls */}
-                  {effectiveLivestock.length > 1 && (
-                    <>
-                      <button 
-                        type="button" 
-                        onClick={() => setActiveLivestockIndex(prev => (prev - 1 + effectiveLivestock.length) % effectiveLivestock.length)}
-                        className="absolute left-4 top-1/2 -translate-y-1/2 z-20 w-11 h-11 rounded-full bg-slate-900/60 hover:bg-slate-900/90 backdrop-blur-md text-white border border-white/20 flex items-center justify-center shadow-2xl transition-all hover:scale-110 active:scale-95"
-                        title="Previous Livestock"
-                      >
-                        <ChevronLeft className="w-6 h-6" />
-                      </button>
-                      <button 
-                        type="button" 
-                        onClick={() => setActiveLivestockIndex(prev => (prev + 1) % effectiveLivestock.length)}
-                        className="absolute right-4 top-1/2 -translate-y-1/2 z-20 w-11 h-11 rounded-full bg-slate-900/60 hover:bg-slate-900/90 backdrop-blur-md text-white border border-white/20 flex items-center justify-center shadow-2xl transition-all hover:scale-110 active:scale-95"
-                        title="Next Livestock"
-                      >
-                        <ChevronRight className="w-6 h-6" />
-                      </button>
-                    </>
-                  )}
-
-                  <div className="absolute top-6 right-6 z-10">
-                    <select
-                      className="bg-white/95 backdrop-blur-md text-slate-900 text-sm font-bold rounded-2xl px-4 py-3 border border-white/40 shadow-2xl cursor-pointer outline-none appearance-none pr-10 relative z-20 max-w-[220px] truncate focus:ring-4 focus:ring-brand-green/20 transition-all duration-300 hover:bg-white"
-                      value={activeLivestockIndex % effectiveLivestock.length}
-                      onChange={(e) => setActiveLivestockIndex(Number(e.target.value))}
-                      style={{ backgroundImage: `url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%230f172a' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E")`, backgroundRepeat: 'no-repeat', backgroundPosition: 'right 1rem center' }}
+                  <div className="relative z-10 space-y-3 text-left">
+                    <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-emerald-700/80 backdrop-blur-md text-white text-[10px] font-black uppercase tracking-wider border border-white/20">
+                      <ShieldCheck className="w-3.5 h-3.5" />
+                      <span>CowPlug NG Verified</span>
+                    </div>
+                    <h3 className="text-xl sm:text-2xl font-black text-white leading-snug">
+                      Healthy, verified livestock raised on our Lagos farm.
+                    </h3>
+                    <button
+                      type="button"
+                      onClick={promptInstall}
+                      className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl bg-brand-green hover:bg-emerald-700 text-white font-black text-xs shadow-xl transition-all hover:scale-[1.02] active:scale-[0.98] cursor-pointer"
                     >
-                      {profile && effectiveLivestock.some(ls => ls.ownerId === profile.uid) && (
-                        <optgroup label="Already Owned">
-                          {effectiveLivestock.map((ls, idx) => (
-                            ls.ownerId === profile.uid && (
-                              <option key={ls.id} value={idx}>
-                                {ls.tagNumber || ls.id.slice(0,6)} - {ls.breed}
-                              </option>
-                            )
-                          ))}
-                        </optgroup>
-                      )}
-                      <optgroup label="Featured Showcase">
-                        {effectiveLivestock.map((ls, idx) => (
-                          (!ls.ownerId || ls.ownerId !== profile?.uid) && (
-                            <option key={ls.id} value={idx}>
-                              {ls.tagNumber || ls.id.slice(0,6)} - {ls.breed} ({ls.status || 'Active'})
-                            </option>
-                          )
-                        ))}
-                      </optgroup>
-                    </select>
-                  </div>
-                  <div className="absolute bottom-6 left-6 right-6 sm:bottom-10 sm:left-10 sm:right-10 flex items-end justify-between">
-                    <div className="bg-white/10 backdrop-blur-xl border border-white/20 p-4 sm:p-5 rounded-2xl flex items-center gap-4 max-w-[70%]">
-                      <div className="w-10 h-10 sm:w-12 sm:h-12 bg-brand-green rounded-xl flex items-center justify-center shrink-0">
-                        <Cow className="w-5 h-5 sm:w-6 sm:h-6 text-white" />
-                      </div>
-                      <div className="min-w-0">
-                        <p className="text-white font-bold text-base sm:text-lg leading-none truncate">{effectiveLivestock[activeLivestockIndex % effectiveLivestock.length].tagNumber || 'Unknown Tag'}</p>
-                        <p className="text-white/70 text-[10px] sm:text-xs font-medium mt-1 uppercase tracking-widest truncate">
-                          {effectiveLivestock[activeLivestockIndex % effectiveLivestock.length].weight}kg • Health: {effectiveLivestock[activeLivestockIndex % effectiveLivestock.length].healthStatus || 'Good'} • {effectiveLivestock[activeLivestockIndex % effectiveLivestock.length].ownerId ? 'Owned Asset' : 'Available'}
-                        </p>
-                      </div>
-                    </div>
-                    <div className="h-10 sm:h-12 px-4 sm:px-6 rounded-full bg-brand-gold flex items-center text-white font-black text-xs sm:text-sm uppercase tracking-wider shadow-lg shrink-0">
-                      {effectiveLivestock[activeLivestockIndex % effectiveLivestock.length].status || 'Verified'}
-                    </div>
-                  </div>
-                </>
-              ) : (
-                /* EMPTY BOX PLACEHOLDER WHEN NO LIVESTOCK SELECTED BY ADMIN */
-                <div className="w-full h-full bg-slate-900 border-2 border-dashed border-slate-700/80 rounded-[3rem] p-8 flex flex-col items-center justify-center text-center relative overflow-hidden group shadow-inner">
-                  <div className="absolute inset-0 bg-gradient-to-br from-brand-green/10 via-transparent to-brand-gold/5 opacity-50" />
-                  <div className="relative z-10 flex flex-col items-center">
-                    <div className="w-20 h-20 rounded-3xl bg-slate-800/90 border border-slate-700 flex items-center justify-center mb-5 shadow-2xl group-hover:scale-105 transition-transform duration-500">
-                      <Cow className="w-10 h-10 text-brand-green/70" />
-                    </div>
-                    <div className="inline-flex items-center gap-2 px-3.5 py-1.5 rounded-full bg-amber-500/10 border border-amber-500/20 text-amber-400 text-xs font-black uppercase tracking-widest mb-3">
-                      Empty Showcase Slot
-                    </div>
-                    <h3 className="text-xl font-black text-white max-w-xs mb-2">No Featured Livestock Selected</h3>
-                    <p className="text-slate-400 text-xs font-medium max-w-sm leading-relaxed">
-                      Select livestock assets in Admin &gt; Land Settings to feature them in this showcase slot.
-                    </p>
+                      <Download className="w-4 h-4" />
+                      <span>Download App to Invest</span>
+                    </button>
+                    {isAdmin && (
+                      <p className="text-amber-300 text-xs font-semibold pt-1">
+                        Admin tip: pick animals in Landing Settings.
+                      </p>
+                    )}
                   </div>
                 </div>
               )}
             </div>
 
-            {/* SCROLLABLE HORIZONTAL THUMBNAIL CHIPS WHEN LIVESTOCK ARE SELECTED */}
+            {/* SCROLLABLE HORIZONTAL THUMBNAIL CHIPS WHEN LIVESTOCK ARE AVAILABLE */}
             {effectiveLivestock.length > 0 && (
               <div className="mt-4 flex items-center gap-3 overflow-x-auto pb-2 scrollbar-thin scrollbar-thumb-slate-300 scrollbar-track-transparent">
                 {effectiveLivestock.map((ls, idx) => {
@@ -546,15 +682,15 @@ export const LandingPage: React.FC<LandingPageProps> = ({ onLogin }) => {
                     >
                       <div className="w-10 h-10 rounded-xl overflow-hidden bg-slate-100 shrink-0">
                         <img 
-                          src={ls.photos?.[0] || ls.livestockImageUrl || "/src/assets/images/brahman_cow_pasture_1785745135569.jpg"} 
-                          alt={ls.tagNumber} 
+                          src={ls.photos?.[0] || ls.livestockImageUrl || fallbackFarmImg} 
+                          alt={ls.tagNumber || ls.breed} 
                           className="w-full h-full object-cover"
                           referrerPolicy="no-referrer"
                         />
                       </div>
                       <div className="pr-1">
-                        <p className="text-xs font-black leading-tight text-slate-900">{ls.tagNumber || ls.id.slice(0,6)}</p>
-                        <p className="text-[10px] font-bold text-slate-400">{ls.breed} • {ls.weight}kg</p>
+                        <p className="text-xs font-black leading-tight text-slate-900">{ls.tagNumber || ls.breed}</p>
+                        <p className="text-[10px] font-bold text-slate-400">{ls.breed} • {formatWeight(ls.weight)}</p>
                       </div>
                     </button>
                   );
@@ -934,6 +1070,24 @@ export const LandingPage: React.FC<LandingPageProps> = ({ onLogin }) => {
           </div>
         </div>
       </footer>
+      {/* Mobile Sticky Install Bar */}
+      {!isStandalone && !isInstalled && (
+        <div className="sm:hidden fixed bottom-0 left-0 right-0 z-40 bg-white/95 backdrop-blur-md border-t border-slate-200 p-3.5 flex items-center justify-between shadow-[0_-10px_30px_rgba(0,0,0,0.1)]">
+          <div className="flex items-center gap-3 min-w-0">
+            <div className="w-10 h-10 rounded-xl bg-emerald-700 flex items-center justify-center text-white shrink-0 shadow-md">
+              <Cow className="w-5 h-5" />
+            </div>
+            <div className="min-w-0">
+              <p className="text-xs font-black text-slate-900 truncate">Get the CowPlug NG app</p>
+              <p className="text-[10px] font-medium text-slate-500 truncate">Instant access, offline ready</p>
+            </div>
+          </div>
+          <Button onClick={promptInstall} size="sm" className="h-10 px-4 rounded-xl font-bold text-xs bg-emerald-700 hover:bg-emerald-800 text-white shrink-0 shadow-lg flex items-center gap-1.5">
+            <Download className="w-4 h-4" />
+            <span>Download</span>
+          </Button>
+        </div>
+      )}
     </div>
   );
 };
