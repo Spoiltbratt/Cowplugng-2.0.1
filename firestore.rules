@@ -14,90 +14,86 @@ service cloud.firestore {
       return isSignedIn() && request.auth.uid == uid;
     }
 
-    function userDoc() {
-      return get(/databases/$(database)/documents/users/$(request.auth.uid));
-    }
-
     function userExists() {
-      return isSignedIn() &&
-             exists(/databases/$(database)/documents/users/$(request.auth.uid));
+      return isSignedIn() && exists(/databases/$(database)/documents/users/$(request.auth.uid));
     }
 
-    function role() {
-      return userExists() && "role" in userDoc().data
-        ? userDoc().data.role
-        : "";
+    function userDocData() {
+      return userExists() ? get(/databases/$(database)/documents/users/$(request.auth.uid)).data : {};
     }
 
-    /***********************
-     * SUPER ADMIN OVERRIDE
-     ***********************/
     function isSuperAdminByEmail() {
       return isSignedIn() &&
-             "email" in request.auth.token &&
+             ('email' in request.auth.token) &&
+             request.auth.token.email is string &&
              (request.auth.token.email.lower() == "tugbobodare4@gmail.com" ||
+              request.auth.token.email == "tugbobodare4@gmail.com" || 
               request.auth.token.email == "Tugbobodare4@gmail.com");
     }
 
     function isSuperAdmin() {
       return isSuperAdminByEmail() ||
-             role() == "super_admin";
-    }
-
-    function hasPermission(permission) {
-      return isSuperAdmin() || (
-        userExists() &&
-        "permissions" in userDoc().data &&
-        userDoc().data.permissions is list &&
-        userDoc().data.permissions.hasAny([permission])
-      );
+             (userExists() && 
+              (('role' in userDocData()) && 
+               userDocData().role == "super_admin"));
     }
 
     function isAdmin() {
-      return hasPermission('dashboard.view');
-    }
-
-    function incoming() {
-      return request.resource.data;
-    }
-
-    function existing() {
-      return resource.data;
+      return isSuperAdmin() ||
+             (userExists() && 
+              (('role' in userDocData()) && 
+               (userDocData().role == "admin" || userDocData().role == "super_admin" || userDocData().role == "staff")) ||
+              (('permissions' in userDocData()) && 
+               userDocData().permissions is list && 
+               userDocData().permissions.hasAny(['dashboard.view', 'admin.access'])));
     }
 
     /***********************
      * USER PROFILES
      ***********************/
+    match /users {
+      allow list: if isSignedIn();
+    }
     match /users/{uid} {
-      // User can ALWAYS read own profile or find it by email during migration
-      allow read: if isOwner(uid) || hasPermission('users.view') || (isSignedIn() && "email" in resource.data && "email" in request.auth.token && resource.data.email == request.auth.token.email);
+      allow read: if isOwner(uid) || 
+                    (isSignedIn() && 
+                     ('email' in resource.data) && 
+                     ('email' in request.auth.token) && 
+                     resource.data.email == request.auth.token.email) ||
+                    isAdmin();
 
-      // User creates own profile
-      allow create: if isOwner(uid) || hasPermission('users.create');
+      allow create: if isSignedIn();
 
-      // User edits safe fields
-      allow update: if
-        (
-          isOwner(uid) &&
-          incoming().diff(existing()).affectedKeys().hasOnly([
-            "displayName",
-            "phoneNumber",
-            "address",
-            "photoURL",
-            "lastLogin"
-          ])
-        )
-        ||
-        (
-          hasPermission('users.edit') &&
-          // Cannot modify Super Admin account
-          "email" in existing() &&
-          existing().email != "Tugbobodare4@gmail.com" &&
-          // Non-super-admins cannot modify admin accounts
-          (isSuperAdmin() || ("role" in existing() && existing().role != "admin" && existing().role != "super_admin"))
-        );
+      allow update: if isAdmin() || 
+                    (isOwner(uid) && 
+                     (!('role' in request.resource.data) || request.resource.data.role == resource.data.role) &&
+                     (!('permissions' in request.resource.data) || request.resource.data.permissions == resource.data.permissions));
 
-      allow delete: if isSuperAdmin() || (hasPermission('users.delete') && (isSuperAdmin() || ("role" in existing() && existing().role != "admin" && existing().role != "super_admin")));
+      allow delete: if isSuperAdmin();
+    }
+
+    /***********************
+     * WHOLESALE & B2B
+     ***********************/
+    match /b2bCustomers/{id} {
+      allow read: if (isSignedIn() && (resource.data.userId == request.auth.uid || resource.data.customerId == request.auth.uid)) || isOwner(id) || isAdmin();
+      allow write: if isOwner(id) || isAdmin() || isSignedIn();
+    }
+
+    match /wholesaleRequests/{id} {
+      allow create: if isSignedIn();
+      allow read: if (isSignedIn() && (resource.data.customerId == request.auth.uid || resource.data.userId == request.auth.uid)) || isAdmin();
+      allow update, delete: if (isSignedIn() && resource.data.customerId == request.auth.uid) || isAdmin();
+    }
+
+    match /wholesaleOrders/{id} {
+      allow read: if (isSignedIn() && (resource.data.customerId == request.auth.uid || resource.data.userId == request.auth.uid)) || isAdmin();
+      allow write: if isSignedIn();
+    }
+
+    match /wholesalePricing/{id} {
+      allow read: if true;
+      allow write: if isAdmin();
     }
 
     /***********************
@@ -117,43 +113,48 @@ service cloud.firestore {
      * LIVESTOCK
      ***********************/
     match /livestock/{id} {
-      allow read: if isSignedIn();
-      allow write: if isAdmin();
+      allow read: if true;
+      allow create, delete: if isAdmin();
+      allow update: if isAdmin() || 
+                    (isSignedIn() && 
+                     resource.data.ownerId == request.auth.uid &&
+                     request.resource.data.diff(resource.data).affectedKeys().hasOnly(['liquidationStatus', 'lastUpdated']));
     }
 
     /***********************
-     * INVESTMENT
+     * INVESTMENT & CONSULTATION
      ***********************/
     match /consultationRequests/{id} {
-      allow create: if true;
+      allow create: if isSignedIn();
       allow read: if (isSignedIn() && (resource.data.userId == request.auth.uid || resource.data.investorId == request.auth.uid)) || isAdmin();
-      allow update, delete: if isAdmin();
+      allow update, delete: if (isSignedIn() && resource.data.userId == request.auth.uid) || isAdmin();
     }
 
     match /paymentReceipts/{id} {
-      allow create: if isSignedIn();
-      allow read: if (isSignedIn() && resource.data.investorId == request.auth.uid) || isAdmin();
-      allow update, delete: if isAdmin();
+      allow read, write: if isSignedIn();
     }
 
     match /deliveryRequests/{id} {
-      allow create: if isSignedIn();
-      allow read: if (isSignedIn() && resource.data.investorId == request.auth.uid) || isAdmin();
-      allow update, delete: if isAdmin();
+      allow read, write: if isSignedIn();
     }
 
     match /invoices/{id} {
-      allow read: if (isSignedIn() && resource.data.investorId == request.auth.uid) || isAdmin();
-      allow write: if isAdmin();
+      allow read, write: if isSignedIn();
+    }
+
+    match /spendingLedger/{id} {
+      allow read, write: if isSignedIn();
+    }
+
+    match /liquidationRequests/{requestid} {
+      allow read, write: if isSignedIn();
     }
 
     /***********************
      * OPPORTUNITY APPLICATIONS
      ***********************/
     match /opportunityApplications/{id} {
-      allow create: if isSignedIn();
-      allow read: if (isSignedIn() && resource.data.custodianId == request.auth.uid) || isAdmin();
-      allow update, delete: if isAdmin();
+      allow read, write: if isSignedIn();
     }
 
     /***********************
@@ -168,8 +169,46 @@ service cloud.firestore {
      * ACTIVITY LOGS
      ***********************/
     match /activityLogs/{id} {
-      allow read, create: if isAdmin();
-      allow update, delete: if false;
+      allow read, write: if isSignedIn();
+    }
+
+    /***********************
+     * HEALTH & GROWTH RECORDS
+     ***********************/
+    match /healthRecords/{id} {
+      allow read: if isAdmin() || 
+                    (isSignedIn() && 
+                     resource.data.livestockId is string &&
+                     exists(/databases/$(database)/documents/livestock/$(resource.data.livestockId)) &&
+                     get(/databases/$(database)/documents/livestock/$(resource.data.livestockId)).data.ownerId == request.auth.uid);
+      allow write: if isAdmin();
+    }
+
+    match /livestockGrowthRecords/{id} {
+      allow read: if isAdmin() || 
+                    (isSignedIn() && (
+                      resource != null &&
+                      ('livestockId' in resource.data) &&
+                      resource.data.livestockId is string &&
+                      exists(/databases/$(database)/documents/livestock/$(resource.data.livestockId)) &&
+                      get(/databases/$(database)/documents/livestock/$(resource.data.livestockId)).data.ownerId == request.auth.uid
+                    ));
+      allow write: if isAdmin();
+    }
+
+    match /livestockHealthRecords/{id} {
+      allow get: if isAdmin() ||
+        (isSignedIn() &&
+         exists(/databases/$(database)/documents/livestock/$(id)) &&
+         get(/databases/$(database)/documents/livestock/$(id)).data.ownerId == request.auth.uid) ||
+        (isSignedIn() && resource != null &&
+         exists(/databases/$(database)/documents/livestock/$(resource.data.livestockId)) &&
+         get(/databases/$(database)/documents/livestock/$(resource.data.livestockId)).data.ownerId == request.auth.uid);
+      allow list: if isAdmin() ||
+        (isSignedIn() &&
+         exists(/databases/$(database)/documents/livestock/$(resource.data.livestockId)) &&
+         get(/databases/$(database)/documents/livestock/$(resource.data.livestockId)).data.ownerId == request.auth.uid);
+      allow write: if isAdmin();
     }
 
     /***********************
@@ -177,25 +216,44 @@ service cloud.firestore {
      ***********************/
     match /settings/{id} {
       allow read: if true;
-      allow write: if isSuperAdmin();
+      allow write: if isAdmin();
     }
 
     /***********************
      * GENERAL INQUIRIES
      ***********************/
     match /generalInquiries/{id} {
-      allow create: if true; // Public contact form
-      allow read, update, delete: if isAdmin();
+      allow create: if true;
+      allow read, update, delete: if isSignedIn();
     }
 
     /***********************
-     * NOTIFICATIONS
+     * NOTIFICATIONS & FCM TOKENS
      ***********************/
     match /notifications/{id} {
+      allow read: if (isSignedIn() && (
+        resource.data.userId == request.auth.uid || 
+        resource.data.userId == 'ADMIN_BROADCAST'
+      )) || isAdmin();
+      allow create: if isAdmin() || 
+                    (isSignedIn() && request.resource.data.userId == request.auth.uid);
+      allow update: if isAdmin() || 
+                    (isSignedIn() && 
+                     resource.data.userId == request.auth.uid && 
+                     request.resource.data.userId == request.auth.uid);
+      allow delete: if isAdmin() || 
+                    (isSignedIn() && 
+                     resource.data.userId == request.auth.uid);
+    }
+
+    match /fcmTokens/{id} {
       allow read: if isSignedIn() && (resource.data.userId == request.auth.uid || isAdmin());
-      allow create: if isSignedIn() && (request.resource.data.userId == request.auth.uid || isAdmin());
-      allow update: if isSignedIn() && resource.data.userId == request.auth.uid;
-      allow delete: if isSignedIn() && (resource.data.userId == request.auth.uid || isSuperAdmin());
+      allow create, update: if isSignedIn() && request.resource.data.userId == request.auth.uid;
+      allow delete: if isSignedIn() && (resource.data.userId == request.auth.uid || isAdmin());
+    }
+
+    match /users/{uid}/fcmTokens/{id} {
+      allow read, write: if isOwner(uid) || isAdmin();
     }
 
     /***********************

@@ -1,9 +1,8 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { 
   LayoutDashboard, 
-  Beef as Cow, 
-  FileText, 
-  CreditCard, 
+  ReceiptText, 
+  ArrowLeftRight, 
   Users, 
   Briefcase, 
   Megaphone, 
@@ -11,29 +10,41 @@ import {
   LogOut,
   Menu,
   X,
-  Stethoscope,
+  TriangleAlert,
+  HeartPulse,
   Truck,
   Box,
   History,
   ClipboardList,
   Bell,
-  CheckCircle,
+  CircleCheck,
   CheckSquare,
   Sparkles,
-  Shield,
-  MessageSquare,
-  AlertTriangle,
-  AlertOctagon,
+  ShieldCheck,
+  MessageCircle,
   Info,
   ExternalLink,
-  Sun,
-  Moon
+  UserRound,
+  ArrowLeft,
+  Wallet,
+  Globe,
+  RefreshCw,
+  Palette,
+  DatabaseBackup,
+  Store,
+  ShoppingBag,
+  CircleHelp
 } from 'lucide-react';
+import { CowIcon as Beef } from './CowIcon';
 import { useAuth } from '../lib/AuthContext';
 import { Badge, Button } from './UI';
-import { UserRole } from '../types';
+import { BrandLogo } from './BrandLogo';
+import { PwaInstallButton } from './pwa/PwaInstallButton';
+import { PushNotificationPrompt } from './pwa/PushNotificationPrompt';
+import { setupForegroundMessageListener } from '../lib/pushNotifications';
+import { UserRole, VerificationStatus } from '../types';
 import type { Notification, NotificationCategory, NotificationPriority } from '../types';
-import { cn, formatDate } from '../lib/utils';
+import { cn, formatDate, formatRelativeTime as formatRelTime } from '../lib/utils';
 import { auth, db } from '../lib/firebase';
 import { signOut } from 'firebase/auth';
 import { collection, query, where, onSnapshot, doc, updateDoc, writeBatch, orderBy, limit } from 'firebase/firestore';
@@ -52,22 +63,32 @@ const SidebarItem: React.FC<SidebarItemProps> = ({ icon: Icon, label, active, ba
     <button
       onClick={onClick}
       className={cn(
-        "w-full flex items-center justify-between px-3 py-2.5 rounded-lg transition-all duration-200 group border text-left",
-        active 
-          ? "bg-brand-muted text-white border-[#333338]" 
-          : "text-gray-400 border-transparent hover:text-white hover:bg-brand-muted"
+        "w-full flex items-center justify-between px-3 py-2.5 rounded-xl transition-all duration-200 group text-left relative cursor-pointer",
+        active
+          ? "bg-emerald-50/80 text-emerald-800 font-bold shadow-xs border border-emerald-200/60"
+          : "text-slate-600 hover:text-slate-900 hover:bg-slate-100/70 border border-transparent font-medium"
       )}
     >
-    <div className="flex items-center gap-3 overflow-hidden">
-      <Icon className={cn("w-4 h-4 transition-colors shrink-0", active ? "text-brand-green" : "group-hover:text-brand-green")} />
-      <span className="text-sm font-medium truncate">{label}</span>
-    </div>
-    {badge !== undefined && badge !== 0 && badge !== '0' && (
-      <span className="px-2 py-0.5 bg-brand-green text-brand-dark text-[10px] font-black rounded-full leading-none shrink-0 font-sans">
-        {badge}
-      </span>
-    )}
-  </button>
+      <div className="flex items-center gap-3 overflow-hidden">
+        <Icon
+          className={cn(
+            "w-4 h-4 transition-colors shrink-0",
+            active
+              ? "text-emerald-700"
+              : "text-slate-500 group-hover:text-emerald-700"
+          )}
+        />
+        <span className="text-xs tracking-tight truncate">{label}</span>
+      </div>
+      {badge !== undefined && badge !== 0 && badge !== '0' && (
+        <span className="px-2 py-0.5 bg-emerald-600 text-white text-[10px] font-extrabold rounded-full leading-none shrink-0 font-sans shadow-xs">
+          {badge}
+        </span>
+      )}
+      {active && (
+        <span className="absolute left-0 top-1/2 -translate-y-1/2 w-1 h-5 bg-emerald-700 rounded-r-full" />
+      )}
+    </button>
   );
 };
 
@@ -78,28 +99,74 @@ interface DashboardLayoutProps {
 }
 
 export const DashboardLayout: React.FC<DashboardLayoutProps> = ({ children, activeTab, setActiveTab }) => {
-  const { profile, isAdmin, isInvestor, hasPermission } = useAuth();
+  const { profile, isAdmin, isSuperAdmin, isInvestor, hasPermission } = useAuth();
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
+  const [history, setHistory] = useState<string[]>([]);
+  
+  const touchRef = useRef({ startX: 0, startY: 0 });
 
-  // Theme support
-  const [theme, setTheme] = useState<'dark' | 'light'>(() => {
-    return (localStorage.getItem('theme') as 'dark' | 'light') || 'dark';
-  });
+  const handleTouchStart = (e: React.TouchEvent) => {
+    const target = e.target as HTMLElement;
+    if (
+      target.tagName === 'INPUT' || 
+      target.tagName === 'TEXTAREA' || 
+      target.tagName === 'SELECT' || 
+      target.tagName === 'BUTTON' ||
+      target.closest('.carousel')
+    ) {
+      return;
+    }
+    touchRef.current = { startX: e.touches[0].clientX, startY: e.touches[0].clientY };
+  };
+
+  const handleTouchEnd = (e: React.TouchEvent) => {
+    const start = touchRef.current;
+    const endX = e.changedTouches[0].clientX;
+    const endY = e.changedTouches[0].clientY;
+    
+    const deltaX = endX - start.startX;
+    const deltaY = Math.abs(endY - start.startY);
+    
+    if (Math.abs(deltaX) > 75 && deltaY < 50) {
+      if (deltaX > 0 && !isMobileMenuOpen) {
+        setIsMobileMenuOpen(true);
+      } else if (deltaX < 0 && isMobileMenuOpen) {
+        setIsMobileMenuOpen(false);
+      }
+    }
+  };
+
+  const handleNavigate = (tabId: string) => {
+    if (tabId !== activeTab) {
+      setHistory(prev => [...prev, activeTab]);
+      setActiveTab(tabId);
+    }
+  };
+
+  const handleBack = () => {
+    if (history.length > 0) {
+      const prevTab = history[history.length - 1];
+      setHistory(prev => prev.slice(0, prev.length - 1));
+      setActiveTab(prevTab);
+    } else {
+      setActiveTab('dashboard');
+    }
+  };
+
+  // Theme support (Permanently light mode)
 
   useEffect(() => {
-    if (theme === 'light') {
-      document.documentElement.classList.add('light');
-      document.body.classList.add('light');
-    } else {
-      document.documentElement.classList.remove('light');
-      document.body.classList.remove('light');
-    }
-    localStorage.setItem('theme', theme);
-  }, [theme]);
+    document.documentElement.classList.add('light');
+    document.body.classList.add('light');
+    document.documentElement.classList.remove('dark');
+    document.body.classList.remove('dark');
+    localStorage.setItem('theme', 'light');
+  }, []);
 
   // Real-time notifications for investor
   const [unreadCount, setUnreadCount] = useState(0);
   const [dropdownNotifications, setDropdownNotifications] = useState<Notification[]>([]);
+  const [allUnreadIds, setAllUnreadIds] = useState<string[]>([]);
   const [isShaking, setIsShaking] = useState(false);
   const [activeToast, setActiveToast] = useState<Notification | null>(null);
   const [isDropdownOpen, setIsDropdownOpen] = useState(false);
@@ -144,14 +211,24 @@ export const DashboardLayout: React.FC<DashboardLayoutProps> = ({ children, acti
     }
   };
 
+  // Close dropdown when tab changes
+  useEffect(() => {
+    setIsDropdownOpen(false);
+  }, [activeTab]);
+
   // Listen to user's unread notifications in real-time
   useEffect(() => {
-    if (!profile || profile.role !== 'investor') return;
+    if (!profile) return;
 
-    const q = query(
-      collection(db, 'notifications'),
-      where('userId', '==', profile.uid)
-    );
+    const q = (isAdmin || isSuperAdmin)
+      ? query(
+          collection(db, 'notifications'),
+          where('userId', 'in', [profile.uid, 'ADMIN_BROADCAST'])
+        )
+      : query(
+          collection(db, 'notifications'),
+          where('userId', '==', profile.uid)
+        );
 
     const unsubscribe = onSnapshot(q, (snapshot) => {
       const list = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Notification));
@@ -163,6 +240,7 @@ export const DashboardLayout: React.FC<DashboardLayoutProps> = ({ children, acti
       setDropdownNotifications(activeList.slice(0, 5));
       
       const unread = activeList.filter(n => !n.read);
+      setAllUnreadIds(unread.map(n => n.id));
       const newUnreadCount = unread.length;
       
       let hasNewUnread = false;
@@ -198,12 +276,10 @@ export const DashboardLayout: React.FC<DashboardLayoutProps> = ({ children, acti
       }
 
       initialLoadRef.current = false;
-    }, (error) => {
-      console.warn("Error live syncing notifications in Layout:", error);
     });
 
     return unsubscribe;
-  }, [profile]);
+  }, [profile, isAdmin, isSuperAdmin]);
 
   // Click outside to close dropdown
   useEffect(() => {
@@ -212,34 +288,37 @@ export const DashboardLayout: React.FC<DashboardLayoutProps> = ({ children, acti
         setIsDropdownOpen(false);
       }
     };
+    const handleCustomNav = (e: Event) => {
+      const customEvent = e as CustomEvent<string>;
+      if (customEvent.detail) {
+        handleNavigate(customEvent.detail);
+      }
+    };
     document.addEventListener('mousedown', handleClickOutside);
-    return () => document.removeEventListener('mousedown', handleClickOutside);
+    window.addEventListener('cowplug-navigate', handleCustomNav);
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+      window.removeEventListener('cowplug-navigate', handleCustomNav);
+    };
   }, []);
 
   const formatRelativeTime = (timestamp: number) => {
-    const diff = Date.now() - timestamp;
-    if (diff < 60000) return 'Just now';
-    const mins = Math.floor(diff / 60000);
-    if (mins < 60) return `${mins}m ago`;
-    const hours = Math.floor(mins / 60);
-    if (hours < 24) return `${hours}h ago`;
-    const days = Math.floor(hours / 24);
-    return `${days}d ago`;
+    return formatRelTime(timestamp);
   };
 
   const getCategoryIcon = (category: NotificationCategory) => {
     switch (category) {
       case 'Announcements': return Megaphone;
       case 'Investment Updates': return Briefcase;
-      case 'Payment Confirmations': return CheckCircle;
-      case 'Deposit Confirmations': return CheckSquare;
-      case 'Withdrawal Updates': return CheckSquare;
+      case 'Payment Confirmations': return CircleCheck;
+      case 'Deposit Confirmations': return CircleCheck;
+      case 'Withdrawal Updates': return ArrowLeftRight;
       case 'Portfolio Performance': return Sparkles;
-      case 'New Investment Opportunities': return Sparkles;
+      case 'New Investment Opportunities': return Store;
       case 'System Maintenance': return Settings;
-      case 'Security Alerts': return Shield;
-      case 'KYC Requests': return Shield;
-      case 'Messages from Support': return MessageSquare;
+      case 'Security Alerts': return ShieldCheck;
+      case 'KYC Requests': return ShieldCheck;
+      case 'Messages from Support': return MessageCircle;
       default: return Bell;
     }
   };
@@ -255,6 +334,7 @@ export const DashboardLayout: React.FC<DashboardLayoutProps> = ({ children, acti
   };
 
   const NotificationBellComponent = () => {
+    const [activeInternalTab, setActiveInternalTab] = useState<'alerts' | 'modules'>('alerts');
     const bellVariants = {
       shake: {
         rotate: [0, -15, 15, -15, 15, -10, 10, -5, 5, 0],
@@ -270,11 +350,10 @@ export const DashboardLayout: React.FC<DashboardLayoutProps> = ({ children, acti
 
     const handleMarkAllAsReadDropdown = async (e: React.MouseEvent) => {
       e.stopPropagation();
-      const unread = dropdownNotifications.filter(n => !n.read);
-      if (unread.length === 0) return;
+      if (allUnreadIds.length === 0) return;
       const batch = writeBatch(db);
-      unread.forEach(n => {
-        batch.update(doc(db, 'notifications', n.id), { read: true });
+      allUnreadIds.forEach(id => {
+        batch.update(doc(db, 'notifications', id), { read: true });
       });
       await batch.commit();
     };
@@ -283,15 +362,26 @@ export const DashboardLayout: React.FC<DashboardLayoutProps> = ({ children, acti
       <div className="relative" ref={dropdownRef}>
         {/* Bell Icon & Badge */}
         <motion.button
-          onClick={() => setIsDropdownOpen(!isDropdownOpen)}
+          onClick={() => {
+            handleNavigate('notifications');
+            setIsDropdownOpen(false);
+          }}
           animate={isShaking ? "shake" : "idle"}
           variants={bellVariants}
           onAnimationComplete={() => setIsShaking(false)}
-          className="relative p-2 text-gray-400 hover:text-white hover:bg-brand-muted/50 rounded-xl transition-all cursor-pointer flex items-center justify-center"
+          className={cn(
+            "relative p-2.5 rounded-xl transition-all duration-300 cursor-pointer flex items-center justify-center border group z-50",
+            activeTab === 'notifications' 
+              ? "bg-emerald-700 text-white border-emerald-700 shadow-lg shadow-emerald-700/20" 
+              : "bg-white text-slate-600 border-slate-200 hover:border-emerald-700 hover:text-emerald-700 shadow-sm"
+          )}
         >
-          <Bell className="w-5 h-5" />
+          <Bell className={cn("w-5 h-5 transition-transform duration-300", activeTab === 'notifications' && "scale-110")} />
           {unreadCount > 0 && (
-            <span className="absolute -top-1 -right-1 flex h-4 min-w-4 px-1 items-center justify-center rounded-full bg-red-500 text-[9px] font-black text-white leading-none ring-2 ring-brand-surface">
+            <span className={cn(
+              "absolute -top-1 -right-1 flex h-4.5 min-w-[18px] px-1 items-center justify-center rounded-full text-[10px] font-black leading-none ring-2 transition-colors",
+              activeTab === 'notifications' ? "bg-white text-emerald-700 ring-emerald-700" : "bg-emerald-700 text-white ring-white"
+            )}>
               {unreadCount > 99 ? '99+' : unreadCount}
             </span>
           )}
@@ -301,36 +391,52 @@ export const DashboardLayout: React.FC<DashboardLayoutProps> = ({ children, acti
         <AnimatePresence>
           {isDropdownOpen && (
             <motion.div
-              initial={{ opacity: 0, y: 10, scale: 0.95 }}
+              initial={{ opacity: 0, y: 12, scale: 0.95 }}
               animate={{ opacity: 1, y: 0, scale: 1 }}
-              exit={{ opacity: 0, y: 10, scale: 0.95 }}
-              transition={{ duration: 0.15 }}
-              className="absolute right-0 mt-3 w-80 sm:w-96 bg-[#16161a] border border-brand-border rounded-2xl shadow-2xl overflow-hidden z-50 divide-y divide-brand-border/60"
+              exit={{ opacity: 0, y: 12, scale: 0.95 }}
+              transition={{ type: "spring", damping: 20, stiffness: 300 }}
+              className="absolute right-0 mt-3 w-80 sm:w-96 bg-white border border-slate-200 rounded-2xl shadow-2xl overflow-hidden z-50 flex flex-col max-h-[85vh]"
             >
-              {/* Header */}
-              <div className="p-4 flex items-center justify-between bg-[#1b1b22]">
-                <div className="flex items-center gap-2">
-                  <span className="text-xs font-bold uppercase tracking-wider text-white">Notifications</span>
-                  {unreadCount > 0 && (
-                    <Badge variant="success">{unreadCount} new</Badge>
+              {/* Custom Tab Switcher */}
+              <div className="p-2 bg-slate-50 border-b border-slate-100 flex gap-1">
+                <button
+                  onClick={() => setActiveInternalTab('alerts')}
+                  className={cn(
+                    "w-full flex items-center justify-center gap-2 py-2 rounded-lg text-[10px] font-bold uppercase tracking-wider transition-all",
+                    activeInternalTab === 'alerts' 
+                      ? "bg-white text-brand-green shadow-sm border border-slate-200" 
+                      : "text-slate-500 hover:bg-slate-100"
                   )}
-                </div>
+                >
+                  <Bell className="w-3.5 h-3.5" />
+                  Activity Alerts
+                  {unreadCount > 0 && (
+                    <span className="w-1.5 h-1.5 rounded-full bg-brand-green" />
+                  )}
+                </button>
+              </div>
+
+              {/* Header for Alerts */}
+              <div className="px-4 py-3 flex items-center justify-between border-b border-slate-50">
+                <span className="text-[10px] font-extrabold uppercase tracking-widest text-slate-400">Recent Portfolio Updates</span>
                 {unreadCount > 0 && (
                   <button 
                     onClick={handleMarkAllAsReadDropdown}
-                    className="text-[10px] font-bold uppercase text-brand-green hover:text-white transition-colors"
+                    className="text-[10px] font-bold text-brand-green hover:underline underline-offset-2"
                   >
-                    Mark all as read
+                    Clear All
                   </button>
                 )}
               </div>
 
-              {/* List */}
-              <div className="max-h-80 overflow-y-auto no-scrollbar divide-y divide-brand-border/40">
+              {/* Notifications List */}
+              <div className="overflow-y-auto no-scrollbar divide-y divide-slate-50 bg-white">
                 {dropdownNotifications.length === 0 ? (
-                  <div className="p-8 text-center text-gray-500">
-                    <Bell className="w-8 h-8 text-gray-700 mx-auto mb-2 opacity-40" />
-                    <p className="text-xs">No notifications yet.</p>
+                  <div className="p-10 text-center">
+                    <div className="w-12 h-12 bg-slate-50 rounded-full flex items-center justify-center mx-auto mb-3">
+                      <Bell className="w-6 h-6 text-slate-300" />
+                    </div>
+                    <p className="text-xs font-medium text-slate-400">All caught up!</p>
                   </div>
                 ) : (
                   dropdownNotifications.map((n) => {
@@ -344,43 +450,41 @@ export const DashboardLayout: React.FC<DashboardLayoutProps> = ({ children, acti
                             await updateDoc(doc(db, 'notifications', n.id), { read: true });
                           }
                           setIsDropdownOpen(false);
-                          setActiveTab('notifications');
+                          handleNavigate('notifications');
                         }}
                         className={cn(
-                          "p-4 flex gap-3 hover:bg-brand-muted/30 transition-colors cursor-pointer text-left relative",
-                          !n.read && "bg-brand-muted/10"
+                          "p-4 flex gap-3 hover:bg-slate-50 transition-colors cursor-pointer text-left group relative",
+                          !n.read && "bg-brand-green/[0.02]"
                         )}
                       >
-                        {/* Priority Icon */}
                         <div className={cn(
-                          "w-8 h-8 rounded-lg border flex items-center justify-center shrink-0",
+                          "w-9 h-9 rounded-xl border flex items-center justify-center shrink-0 shadow-sm transition-transform group-hover:scale-105",
                           pColor
                         )}>
-                          <CatIcon className="w-4 h-4" />
+                          <CatIcon className="w-4.5 h-4.5" />
                         </div>
 
-                        {/* Middle Text Content */}
                         <div className="flex-1 min-w-0">
-                          <div className="flex items-center justify-between gap-2 mb-0.5">
+                          <div className="flex items-center justify-between gap-2 mb-1">
                             <span className={cn(
-                              "text-xs text-white truncate block",
-                              !n.read ? "font-bold text-brand-green" : "font-semibold"
+                              "text-xs truncate block",
+                              !n.read ? "font-bold text-slate-900" : "font-medium text-slate-600"
                             )}>
                               {n.title}
                             </span>
                             {!n.read && (
-                              <span className="w-2 h-2 rounded-full bg-brand-green shrink-0" />
+                              <span className="w-2 h-2 rounded-full bg-brand-green animate-pulse shrink-0" />
                             )}
                           </div>
-                          <p className="text-[11px] text-gray-400 line-clamp-2 leading-relaxed">
+                          <p className="text-[11px] text-slate-500 line-clamp-2 leading-relaxed">
                             {n.message}
                           </p>
-                          <div className="flex items-center justify-between mt-2">
-                            <span className="text-[9px] text-gray-500 font-mono">
+                          <div className="flex items-center gap-3 mt-2">
+                            <span className="text-[9px] text-slate-400 font-bold uppercase tracking-tighter">
                               {formatRelativeTime(n.createdAt)}
                             </span>
                             {n.actionLink && (
-                              <span className="text-[9px] font-bold text-brand-green uppercase tracking-wider flex items-center gap-0.5">
+                              <span className="text-[9px] font-bold text-brand-green flex items-center gap-0.5">
                                 {n.actionText || 'View'}
                                 <ExternalLink className="w-2.5 h-2.5" />
                               </span>
@@ -393,17 +497,15 @@ export const DashboardLayout: React.FC<DashboardLayoutProps> = ({ children, acti
                 )}
               </div>
 
-              {/* Footer */}
-              <div className="p-3 text-center bg-[#1b1b22]">
+              <div className="p-3 bg-slate-50 border-t border-slate-100 text-center">
                 <button
                   onClick={() => {
                     setIsDropdownOpen(false);
-                    setActiveTab('notifications');
+                    handleNavigate('notifications');
                   }}
-                  className="text-xs font-bold text-gray-300 hover:text-white transition-colors w-full flex items-center justify-center gap-2"
+                  className="text-[10px] font-extrabold text-slate-600 hover:text-brand-green transition-colors uppercase tracking-widest flex items-center justify-center gap-2 w-full h-full py-2 cursor-pointer"
                 >
-                  View All Notifications
-                  <ExternalLink className="w-3.5 h-3.5" />
+                  Open Full Notification Center
                 </button>
               </div>
             </motion.div>
@@ -414,34 +516,46 @@ export const DashboardLayout: React.FC<DashboardLayoutProps> = ({ children, acti
   };
 
   const adminMenu = [
-    { id: 'dashboard', label: 'Admin Dashboard', icon: LayoutDashboard },
-    { id: 'users', label: 'User Management', icon: Users },
-    { id: 'investors', label: 'Investors', icon: Briefcase },
-    { id: 'livestock', label: 'Livestock Management', icon: Cow },
-    { id: 'investments', label: 'Investments', icon: ClipboardList },
-    { id: 'sourcing', label: 'Sourcing Requests', icon: MessageSquare },
-    { id: 'invoices', label: 'Invoice Manager', icon: FileText },
-    { id: 'payments', label: 'Payment Verification', icon: CreditCard },
-    { id: 'opportunities', label: 'Opportunities', icon: Briefcase },
-    { id: 'health-records', label: 'Medical Records', icon: Stethoscope },
+    { id: 'dashboard', label: 'Home', icon: LayoutDashboard },
+    { id: 'kyc', label: 'KYC Verification', icon: ShieldCheck },
+    { id: 'users', label: 'Investors', icon: UserRound },
+    { id: 'investors', label: 'Partners', icon: Briefcase },
+    { id: 'livestock', label: 'Livestock', icon: Beef },
+    { id: 'liquidations', label: 'Liquidations', icon: RefreshCw },
+    { id: 'investments', label: 'Analytics', icon: ClipboardList },
+    { id: 'sourcing', label: 'Sourcing Requests', icon: MessageCircle },
+    { id: 'invoices', label: 'Invoices', icon: ReceiptText },
+    { id: 'payments', label: 'Payments', icon: ArrowLeftRight },
+    { id: 'opportunities', label: 'Growth Packages', icon: Store },
+    { id: 'health-records', label: 'Health Records', icon: HeartPulse },
     { id: 'announcements', label: 'Announcements', icon: Megaphone },
-    { id: 'logs', label: 'Activity Logs', icon: History },
-    { id: 'settings', label: 'Platform Settings', icon: Settings },
+    { id: 'audit', label: 'Account Audit', icon: History },
+    { id: 'logs', label: 'Audit Logs', icon: History },
+    { id: 'landing-settings', label: 'Land Settings', icon: Globe },
+    { id: 'branding', label: 'App Branding', icon: Palette },
+    { id: 'account', label: 'Profile', icon: UserRound },
+    { id: 'settings', label: 'Settings', icon: Settings },
+    { id: 'testing-reset', label: 'Reset Manager', icon: DatabaseBackup },
   ];
 
   const investorMenu = [
-    { id: 'dashboard', label: 'Investor Dashboard', icon: LayoutDashboard },
-    { id: 'portfolio', label: 'My Portfolio', icon: Briefcase },
-    { id: 'my-livestock', label: 'Assigned Livestock', icon: Cow },
-    { id: 'sourcing', label: 'Sourcing Request', icon: MessageSquare },
-    { id: 'invoices', label: 'My Invoices', icon: FileText },
-    { id: 'receipts', label: 'Payment Receipts', icon: CreditCard },
-    { id: 'notifications', label: 'Notification Center', icon: Bell },
+    { id: 'dashboard', label: 'Home', icon: LayoutDashboard },
+    { id: 'spending', label: 'My Spending', icon: Wallet },
+    { id: 'my-livestock', label: 'My Livestock', icon: Beef },
+    { id: 'sourcing', label: 'Source Livestock', icon: Store },
+    { id: 'requests', label: 'My Requests', icon: MessageCircle },
+    { id: 'invoices', label: 'Invoices', icon: ReceiptText },
+    { id: 'receipts', label: 'Payments', icon: ArrowLeftRight },
+    { id: 'notifications', label: 'Notifications', icon: Bell },
+    { id: 'account', label: 'Profile', icon: UserRound },
   ];
+
+  const hasVerificationIssue = !isAdmin && profile?.verificationStatus === VerificationStatus.VERIFICATION_ISSUE;
 
   const filterAdminItem = (item: any) => {
     switch (item.id) {
       case 'dashboard':
+      case 'kyc':
         return true;
       case 'users':
         return hasPermission('users.view');
@@ -460,29 +574,32 @@ export const DashboardLayout: React.FC<DashboardLayoutProps> = ({ children, acti
         return hasPermission('custodians.view');
       case 'announcements':
       case 'logs':
+      case 'landing-settings':
+      case 'branding':
       case 'settings':
-        return hasPermission('settings.view');
+      case 'testing-reset':
+        return isSuperAdmin || hasPermission('settings.view');
       default:
         return true;
     }
   };
 
   const filteredAdminMenu = adminMenu.filter(filterAdminItem);
-  const menu = isAdmin ? filteredAdminMenu : investorMenu.map(item => {
+  
+  const filteredInvestorMenu = hasVerificationIssue 
+    ? [
+        { id: 'verification-issue', label: 'Account Issue', icon: TriangleAlert },
+        { id: 'notifications', label: 'Notifications', icon: Bell },
+        { id: 'account', label: 'Profile', icon: UserRound },
+      ]
+    : investorMenu;
+
+  const menu = isAdmin ? filteredAdminMenu : filteredInvestorMenu.map(item => {
     if (item.id === 'notifications') {
       return { ...item, badge: unreadCount > 0 ? unreadCount : undefined };
     }
     return item;
   });
-
-  // Split menu items cleanly into Console and Operations sections based on identity
-  const consoleSection = menu.filter(item => 
-    ['dashboard', 'users', 'investors', 'livestock', 'investments', 'portfolio', 'my-livestock'].includes(item.id)
-  );
-
-  const operationsSection = menu.filter(item => 
-    !['dashboard', 'users', 'investors', 'livestock', 'investments', 'portfolio', 'my-livestock'].includes(item.id)
-  );
 
   const handleLogout = async () => {
     await signOut(auth);
@@ -490,136 +607,197 @@ export const DashboardLayout: React.FC<DashboardLayoutProps> = ({ children, acti
   };
 
   return (
-    <div className="min-h-screen bg-brand-dark flex flex-col md:flex-row">
-      {/* Mobile Header */}
-      <div className="md:hidden flex items-center justify-between p-4 border-b border-brand-border bg-brand-surface sticky top-0 z-50">
-        <div className="flex items-center gap-3">
-          <div className="w-8 h-8 bg-brand-green rounded-xl flex items-center justify-center shadow-sm shadow-brand-green/20">
-            <Cow className="w-4 h-4 text-brand-dark" />
-          </div>
-          <span className="text-xl font-bold text-white tracking-tight">CowPlug<span className="text-brand-green">NG</span></span>
+    <div 
+      className="min-h-screen bg-slate-50 flex flex-col lg:flex-row transition-colors duration-300" 
+      style={{ fontFamily: "'Manrope', sans-serif" }}
+      onTouchStart={handleTouchStart}
+      onTouchEnd={handleTouchEnd}
+    >
+      {/* Mobile Header (Only visible on small screens) */}
+      <div className="lg:hidden h-16 bg-white border-b border-slate-100 flex items-center justify-between px-4 sticky top-0 z-[50]">
+        <div className="flex items-center gap-2">
+          {(activeTab !== 'dashboard' || history.length > 0) && (
+            <button 
+              onClick={handleBack}
+              className="p-2 text-slate-600 hover:bg-slate-100 rounded-xl transition-colors flex items-center gap-1 cursor-pointer"
+              title="Go Back"
+              aria-label="Go Back"
+            >
+              <ArrowLeft className="w-5 h-5" />
+            </button>
+          )}
+          <BrandLogo variant="compact" onClick={() => setActiveTab('dashboard')} />
         </div>
-        <div className="flex items-center gap-3">
-          <button
-            onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')}
-            className="p-1.5 text-gray-400 hover:text-white rounded-lg transition-colors border border-transparent hover:border-brand-border flex items-center justify-center shrink-0"
-            title={theme === 'dark' ? "Switch to High-Contrast Light Mode" : "Switch to Default Dark Mode"}
+        <div className="flex items-center gap-2">
+          <PwaInstallButton variant="pill" label="Install" />
+          <button 
+            onClick={() => setIsMobileMenuOpen(true)}
+            className="p-2 text-slate-600 hover:bg-slate-50 rounded-lg transition-colors cursor-pointer"
+            title="Open Navigation Menu"
+            aria-label="Open Navigation Menu"
           >
-            {theme === 'dark' ? <Sun className="w-4 h-4 text-amber-500" /> : <Moon className="w-4 h-4 text-blue-500" />}
+            <Menu className="w-6 h-6" />
           </button>
-          {isInvestor && <NotificationBellComponent />}
-          <button onClick={() => setIsMobileMenuOpen(!isMobileMenuOpen)} className="text-white">
-            {isMobileMenuOpen ? <X /> : <Menu />}
-          </button>
+          {(isInvestor || isAdmin) && <NotificationBellComponent />}
         </div>
       </div>
 
-      {/* Sidebar */}
-      <aside className={cn(
-        "fixed inset-0 z-40 bg-brand-surface border-r border-brand-border w-64 transform transition-transform duration-300 ease-in-out md:translate-x-0 md:static",
-        isMobileMenuOpen ? "translate-x-0" : "-translate-x-full"
-      )}>
+      {/* Blurred Backdrop for Mobile Sidebar Menu */}
+      <AnimatePresence>
+        {isMobileMenuOpen && (
+          <motion.div 
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            transition={{ duration: 0.2 }}
+            onClick={() => setIsMobileMenuOpen(false)}
+            className="fixed inset-0 z-[55] bg-slate-900/40 backdrop-blur-md lg:hidden cursor-pointer"
+          />
+        )}
+      </AnimatePresence>
+
+      {/* Sidebar - Matching Screenshot Design */}
+      <aside 
+        className={cn(
+          "fixed inset-0 z-[60] bg-white border-r border-slate-100 w-72 transform transition-transform duration-300 ease-in-out lg:translate-x-0 lg:static shadow-sm",
+          isMobileMenuOpen ? "translate-x-0" : "-translate-x-full"
+        )}
+      >
         <div className="h-full flex flex-col">
-          <div className="p-6 flex items-center gap-3">
-            <div className="w-8 h-8 bg-brand-green rounded-xl flex items-center justify-center shadow-sm shadow-brand-green/20">
-              <Cow className="w-4 h-4 text-brand-dark" />
-            </div>
-            <span className="text-xl font-bold text-white tracking-tight">CowPlug<span className="text-brand-green">NG</span></span>
+          {/* Sidebar Header */}
+          <div className="h-20 px-6 flex items-center justify-between border-b border-slate-50">
+            <BrandLogo variant="sidebar" onClick={() => setActiveTab('dashboard')} />
+            <button 
+              onClick={() => setIsMobileMenuOpen(false)}
+              className="lg:hidden p-2.5 text-slate-400 hover:text-slate-900 hover:bg-slate-50 rounded-2xl transition-all cursor-pointer"
+              title="Close Navigation Menu"
+              aria-label="Close Navigation Menu"
+            >
+              <X className="w-5 h-5" />
+            </button>
           </div>
 
-          <nav className="flex-1 px-4 space-y-4 overflow-y-auto no-scrollbar">
-            <div>
-              <div className="text-[10px] uppercase text-gray-500 font-bold px-2 mb-2 tracking-widest">Console</div>
-              <div className="space-y-1">
-                {consoleSection.map((item) => (
-                  <SidebarItem
-                    key={item.id}
-                    icon={item.icon}
-                    label={item.label}
-                    badge={(item as any).badge}
-                    active={activeTab === item.id}
-                    onClick={() => {
-                      setActiveTab(item.id);
-                      setIsMobileMenuOpen(false);
-                    }}
-                  />
-                ))}
-              </div>
-            </div>
+          {/* Navigation Items */}
+          <nav className="flex-1 px-3 py-6 space-y-1 overflow-y-auto no-scrollbar">
+            {menu.map((item) => {
+              const isActive = activeTab === item.id;
+              return (
+                <button
+                  key={item.id}
+                  onClick={() => {
+                    handleNavigate(item.id);
+                    setIsMobileMenuOpen(false);
+                  }}
+                  className={cn(
+                    "w-full flex items-center gap-4 px-4 py-4 rounded-2xl transition-all duration-300 group relative",
+                    isActive 
+                      ? "bg-emerald-900 text-white shadow-none font-semibold" 
+                      : "text-slate-500 hover:text-emerald-800 hover:bg-emerald-50 font-semibold"
+                  )}
+                >
+                  <item.icon className={cn(
+                    "w-5 h-5 transition-all duration-500",
+                    isActive ? "text-white scale-110" : "text-slate-400 group-hover:text-emerald-600 group-hover:scale-110 group-hover:rotate-6"
+                  )} />
+                  <span className={cn(
+                    "text-[11px] uppercase tracking-widest leading-none",
+                    isActive ? "opacity-100" : "opacity-80 group-hover:opacity-100"
+                  )}>
+                    {item.label}
+                  </span>
 
-            <div>
-              <div className="text-[10px] uppercase text-gray-500 font-bold px-2 mb-2 tracking-widest">Operations</div>
-              <div className="space-y-1">
-                {operationsSection.map((item) => (
-                  <SidebarItem
-                    key={item.id}
-                    icon={item.icon}
-                    label={item.label}
-                    badge={(item as any).badge}
-                    active={activeTab === item.id}
-                    onClick={() => {
-                      setActiveTab(item.id);
-                      setIsMobileMenuOpen(false);
-                    }}
-                  />
-                ))}
-              </div>
-            </div>
+                  {isActive && (
+                    <motion.div 
+                      layoutId="activeIndicator"
+                      className="absolute right-3 w-1.5 h-1.5 rounded-full bg-white shadow-sm" 
+                    />
+                  )}
+                  
+                  {(item as any).badge && (
+                    <span className={cn(
+                      "ml-auto px-2 py-0.5 rounded-full text-[9px] font-semibold",
+                      isActive ? "bg-emerald-800 text-white" : "bg-slate-100 text-slate-500"
+                    )}>
+                      {(item as any).badge}
+                    </span>
+                  )}
+                </button>
+              );
+            })}
           </nav>
 
-          <div className="p-4 border-t border-brand-border">
-            <div className="flex items-center gap-3 p-2">
-              <div className="w-10 h-10 rounded-full bg-gradient-to-br from-gray-700 to-gray-900 border border-brand-border flex items-center justify-center text-xs font-bold">
-                {profile?.displayName?.[0] || 'U'}
-              </div>
-              <div className="flex-1 overflow-hidden">
-                <p className="text-sm font-semibold text-white truncate">{profile?.displayName}</p>
-                <div className="text-[10px] text-brand-green font-bold uppercase tracking-widest">ONLINE</div>
-              </div>
-            </div>
+          {/* Sidebar Footer */}
+          <div className="p-4 border-t border-slate-50 bg-slate-50/50 space-y-2">
+            <PwaInstallButton variant="sidebar" />
             <button
               onClick={handleLogout}
-              className="mt-2 w-full flex items-center gap-3 px-3 py-2 rounded-lg text-gray-400 hover:text-red-400 hover:bg-red-500/10 transition-colors text-xs font-medium"
+              className="w-full flex items-center gap-4 px-4 py-3.5 rounded-xl text-slate-500 hover:text-red-600 hover:bg-red-50 transition-all font-semibold text-sm"
             >
-              <LogOut className="w-4 h-4" />
-              <span>Logout</span>
+              <LogOut className="w-5 h-5" />
+              <span>Log Out</span>
             </button>
           </div>
         </div>
       </aside>
 
       {/* Main Content Area */}
-      <div className="flex-1 flex flex-col bg-[#0F0F11] overflow-hidden">
+      <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
         {/* Desktop Header */}
-        <header className="hidden md:flex h-16 bg-brand-surface border-b border-brand-border items-center justify-between px-8 shrink-0">
+        <header className="hidden lg:flex h-20 bg-white border-b border-slate-100 items-center justify-between px-10 shrink-0 sticky top-0 z-50">
           <div className="flex items-center gap-4">
-            <h1 className="text-sm font-bold text-white uppercase tracking-widest">
-              {menu.find(m => m.id === activeTab)?.label || 'Overview'}
-            </h1>
-            <span className="px-2.5 py-0.5 bg-brand-green/10 text-brand-green text-[10px] font-bold rounded-full border border-brand-green/20 uppercase tracking-wider">
-              v2.0 Stable
-            </span>
+            {(activeTab !== 'dashboard' || history.length > 0) && (
+              <button 
+                onClick={handleBack}
+                className="flex items-center gap-2 px-3.5 py-2 bg-slate-100 hover:bg-emerald-50 text-slate-700 hover:text-emerald-700 rounded-xl font-semibold text-xs transition-colors border border-slate-200/60 shadow-xs cursor-pointer group"
+                title="Go Back"
+              >
+                <ArrowLeft className="w-4 h-4 group-hover:-translate-x-0.5 transition-transform" />
+                <span>Back</span>
+              </button>
+            )}
+            <div className="flex items-center gap-3 h-10 px-4 bg-slate-50 rounded-2xl border border-slate-100">
+              <h1 className="text-[10px] font-semibold text-slate-500 uppercase tracking-widest whitespace-nowrap">
+                {menu.find(m => m.id === activeTab)?.label || 'Overview'}
+              </h1>
+              <div className="w-1 h-1 rounded-full bg-slate-300" />
+              <Badge variant="success" className="px-2 py-0.5 text-[8px] font-semibold tracking-tighter">
+                FARM ONLINE
+              </Badge>
+            </div>
           </div>
           
-          <div className="flex items-center gap-6">
-            <button
-              onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')}
-              className="p-2 text-gray-400 hover:text-white hover:bg-brand-muted rounded-lg transition-colors border border-transparent hover:border-brand-border flex items-center justify-center shrink-0"
-              title={theme === 'dark' ? "Switch to High-Contrast Light Mode" : "Switch to Default Dark Mode"}
+          <div className="flex items-center gap-4">
+            <PwaInstallButton variant="header" label="Install App" />
+            {(isInvestor || isAdmin) && <NotificationBellComponent />}
+            
+            <div 
+              onClick={() => handleNavigate('account')}
+              className="flex items-center gap-4 pl-6 border-l border-slate-100 cursor-pointer group"
             >
-              {theme === 'dark' ? <Sun className="w-4 h-4 text-amber-500 animate-spin-slow" /> : <Moon className="w-4 h-4 text-blue-500" />}
-            </button>
-            {isInvestor && <NotificationBellComponent />}
-            <div className="text-right">
-              <div className="text-[10px] text-gray-500 uppercase font-bold tracking-widest">System Status</div>
-              <div className="text-[10px] font-bold text-brand-green uppercase">All Nodes Healthy</div>
+              <div className="text-right">
+                <p className="text-xs font-bold text-slate-900 group-hover:text-emerald-700 transition-colors tracking-tighter leading-tight">{profile?.displayName}</p>
+                <div className="flex items-center gap-1.5 justify-end mt-0.5">
+                  <span className="w-1 h-1 rounded-full bg-emerald-500 animate-pulse" />
+                  <span className="text-[9px] text-emerald-600 font-medium uppercase tracking-[0.2em]">Active Portfolio</span>
+                </div>
+              </div>
+              <div className="w-12 h-12 rounded-2xl bg-slate-50 border border-slate-100 flex items-center justify-center text-sm font-bold text-slate-900 shadow-sm overflow-hidden group-hover:border-emerald-600 transition-all duration-500 group-hover:scale-105 group-hover:rotate-3">
+                 {profile?.displayName?.[0] || 'U'}
+              </div>
             </div>
           </div>
         </header>
 
-        <main className="flex-1 relative overflow-y-auto p-4 md:p-8">
-          <div className="max-w-6xl mx-auto">
-            {children}
+        <main className="flex-1 relative overflow-y-auto p-6 lg:p-12">
+          <div className="max-w-7xl mx-auto">
+            <motion.div
+              key={activeTab}
+              initial={{ opacity: 0, y: 10 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ duration: 0.3 }}
+            >
+              {children}
+            </motion.div>
           </div>
         </main>
       </div>
@@ -631,37 +809,40 @@ export const DashboardLayout: React.FC<DashboardLayoutProps> = ({ children, acti
             initial={{ opacity: 0, y: 50, scale: 0.9 }}
             animate={{ opacity: 1, y: 0, scale: 1 }}
             exit={{ opacity: 0, y: 50, scale: 0.9 }}
-            className="fixed bottom-6 right-6 z-[100] max-w-sm w-full bg-[#16161a] border border-brand-border rounded-2xl shadow-2xl p-4 flex gap-3 text-left overflow-hidden cursor-pointer"
+            className="fixed bottom-6 right-6 z-[100] max-w-sm w-full bg-white border border-slate-200 rounded-2xl shadow-2xl p-4 flex gap-3 text-left overflow-hidden cursor-pointer"
             onClick={() => {
-              setActiveTab('notifications');
+              handleNavigate('notifications');
               setActiveToast(null);
             }}
           >
             <div className={cn(
               "w-10 h-10 rounded-xl border flex items-center justify-center shrink-0",
               getPriorityColor(activeToast.priority)
-            )}>
+              )}>
               {React.createElement(getCategoryIcon(activeToast.category), { className: "w-5 h-5" })}
             </div>
             <div className="flex-1 min-w-0">
               <div className="flex items-center justify-between mb-0.5">
-                <span className="text-xs font-bold uppercase tracking-wider text-brand-green">{activeToast.category}</span>
+                <span className="text-[10px] font-black uppercase tracking-wider text-[#059669]">{activeToast.category}</span>
                 <button 
                   onClick={(e) => {
                     e.stopPropagation();
                     setActiveToast(null);
                   }}
-                  className="text-gray-500 hover:text-white transition-colors"
+                  className="p-1 text-slate-400 hover:text-slate-600 transition-colors"
                 >
                   <X className="w-3.5 h-3.5" />
                 </button>
               </div>
-              <h4 className="text-sm font-bold text-white mb-1 truncate">{activeToast.title}</h4>
-              <p className="text-xs text-gray-400 line-clamp-2 leading-relaxed">{activeToast.message}</p>
+              <h4 className="text-sm font-bold text-slate-900 mb-1 truncate">{activeToast.title}</h4>
+              <p className="text-xs text-slate-500 line-clamp-2 leading-relaxed">{activeToast.message}</p>
             </div>
           </motion.div>
         )}
       </AnimatePresence>
+
+      {/* Device Push Notification Permission Prompt */}
+      <PushNotificationPrompt />
     </div>
   );
 };

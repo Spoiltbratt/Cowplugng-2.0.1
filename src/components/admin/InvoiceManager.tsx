@@ -4,12 +4,13 @@ import {
   Send, Trash2, CheckCircle, Clock, AlertCircle,
   Eye, FileCheck, ExternalLink, Printer, Trash, X
 } from 'lucide-react';
-import { db, sendNotification } from '../../lib/firebase';
+import { db, sendNotification, notifyAdmins } from '../../lib/firebase';
 import { collection, query, onSnapshot, doc, updateDoc, addDoc, getDocs, where, serverTimestamp } from 'firebase/firestore';
-import { Invoice, ConsultationRequest, UserProfile, UserRole } from '../../types';
-import { Card, Button, Badge, Input } from '../UI';
+import { Invoice, ConsultationRequest, UserProfile, UserRole, ChargeCategory } from '../../types';
+import { Card, Button, Badge, Input, Modal } from '../UI';
 import { cn, formatDate, formatCurrency } from '../../lib/utils';
 import { motion, AnimatePresence } from 'motion/react';
+import { CowPlugInvoice } from '../CowPlugInvoice';
 
 export const InvoiceManager: React.FC = () => {
   const [invoices, setInvoices] = useState<Invoice[]>([]);
@@ -18,6 +19,7 @@ export const InvoiceManager: React.FC = () => {
   const [loading, setLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedInvoice, setSelectedInvoice] = useState<Invoice | null>(null);
+  const [isDetailModalOpen, setIsDetailModalOpen] = useState(false);
   const [showConfirmCancel, setShowConfirmCancel] = useState(false);
 
   // Manual Creation States
@@ -29,8 +31,14 @@ export const InvoiceManager: React.FC = () => {
   const [accountName, setAccountName] = useState('CowPlugNG Operations');
   const [accountNumber, setAccountNumber] = useState('0123456789');
   const [notes, setNotes] = useState('');
-  const [items, setItems] = useState<{ description: string; quantity: number; price: number; }[]>([
-    { description: 'Livestock Sourcing Service', quantity: 1, price: 500000 }
+  const [items, setItems] = useState<{ 
+    description: string; 
+    category: ChargeCategory; 
+    quantity: number; 
+    price: number;
+    livestockTag?: string;
+  }[]>([
+    { description: 'Livestock Sourcing Service', category: 'Livestock Purchase', quantity: 1, price: 500000, livestockTag: '' }
   ]);
 
   useEffect(() => {
@@ -59,12 +67,20 @@ export const InvoiceManager: React.FC = () => {
       await updateDoc(doc(db, 'invoices', id), { status });
       
       const invoice = invoices.find(inv => inv.id === id);
-      if (invoice && status === 'PAID') {
-        // Notify user of payment approval
-        await sendNotification(
-          invoice.investorId,
-          'Payment Received & Approved',
-          `Your payment for invoice ${invoice.invoiceNumber} has been received and approved. Your livestock will be assigned shortly.`,
+      if (invoice) {
+        if (status === 'PAID') {
+          // Notify user of payment approval
+          await sendNotification(
+            invoice.investorId,
+            'Payment Received & Approved',
+            `Your payment for invoice ${invoice.invoiceNumber} has been received and approved. Your livestock will be assigned shortly.`,
+            'Payment Confirmations',
+            'INFO'
+          );
+        }
+        await notifyAdmins(
+          'Invoice Status Changed',
+          `Invoice ${invoice.invoiceNumber} status was changed to ${status}.`,
           'Payment Confirmations',
           'INFO'
         );
@@ -80,7 +96,7 @@ export const InvoiceManager: React.FC = () => {
   };
 
   const handleAddItem = () => {
-    setItems([...items, { description: '', quantity: 1, price: 0 }]);
+    setItems([...items, { description: '', category: 'Farm Management', quantity: 1, price: 0, livestockTag: '' }]);
   };
 
   const handleRemoveItem = (index: number) => {
@@ -102,19 +118,30 @@ export const InvoiceManager: React.FC = () => {
       return;
     }
 
-    const totalAmount = items.reduce((sum, item) => sum + (item.price * item.quantity), 0);
+    const formattedItems = items.map(item => ({
+      description: item.description.trim(),
+      category: item.category || 'Other',
+      quantity: item.quantity,
+      unitPrice: item.price,
+      price: item.price,
+      amount: item.price * item.quantity,
+      livestockTag: item.livestockTag?.trim() || ''
+    }));
+
+    const totalAmount = formattedItems.reduce((sum, item) => sum + item.amount, 0);
     const calculatedInvNum = invoiceNumber.trim() || `INV-${Math.floor(100000 + Math.random() * 900000)}`;
 
     try {
       const invoiceData = {
         invoiceNumber: calculatedInvNum,
-        requestId: '',
+        requestId: 'MANUAL',
         investorId,
         dueDate: dueDateStr ? new Date(dueDateStr).getTime() : Date.now() + 7 * 24 * 60 * 60 * 1000,
         status: 'PENDING',
         notes: notes.trim(),
         createdAt: Date.now(),
-        items,
+        items: formattedItems,
+        subtotal: totalAmount,
         totalAmount,
         bankDetails: {
           bankName: bankName.trim(),
@@ -124,6 +151,21 @@ export const InvoiceManager: React.FC = () => {
       };
 
       await addDoc(collection(db, 'invoices'), invoiceData);
+
+      // Send push notifications
+      await sendNotification(
+        investorId,
+        'New Invoice Issued',
+        `Invoice ${calculatedInvNum} for ₦${totalAmount.toLocaleString()} has been generated for your account.`,
+        'Payment Confirmations',
+        'INFO'
+      );
+      await notifyAdmins(
+        'New Invoice Created',
+        `Invoice ${calculatedInvNum} for ₦${totalAmount.toLocaleString()} was issued to an investor.`,
+        'Payment Confirmations',
+        'INFO'
+      );
 
       // Reset Form State
       setInvestorId('');
@@ -143,8 +185,8 @@ export const InvoiceManager: React.FC = () => {
 
   const filteredInvoices = invoices.filter(inv => {
     const investorName = investors.find(i => i.uid === inv.investorId)?.displayName || '';
-    return inv.invoiceNumber.toLowerCase().includes(searchTerm.toLowerCase()) ||
-           investorName.toLowerCase().includes(searchTerm.toLowerCase());
+    return (inv.invoiceNumber || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
+           (investorName || '').toLowerCase().includes(searchTerm.toLowerCase());
   });
 
   return (
@@ -192,6 +234,7 @@ export const InvoiceManager: React.FC = () => {
                       )}
                       onClick={() => {
                         setSelectedInvoice(inv);
+                        setIsDetailModalOpen(true);
                         setShowConfirmCancel(false);
                       }}
                     >
@@ -203,7 +246,7 @@ export const InvoiceManager: React.FC = () => {
                           <span className="text-sm font-semibold font-mono">{inv.invoiceNumber}</span>
                         </div>
                       </td>
-                      <td className="py-4 text-xs text-white">
+                      <td className="py-4 text-xs text-slate-900">
                         {investors.find(i => i.uid === inv.investorId)?.displayName || '---'}
                       </td>
                       <td className="py-4 text-sm font-bold text-brand-green">
@@ -218,7 +261,7 @@ export const InvoiceManager: React.FC = () => {
                           {inv.status}
                         </Badge>
                       </td>
-                      <td className="py-4 text-xs text-gray-400">
+                      <td className="py-4 text-xs text-slate-600">
                         {formatDate(inv.dueDate)}
                       </td>
                       <td className="py-4 text-right">
@@ -235,170 +278,78 @@ export const InvoiceManager: React.FC = () => {
         </div>
 
         <div>
-          <AnimatePresence mode="wait">
-            {selectedInvoice ? (
-              <motion.div
-                initial={{ opacity: 0, x: 20 }}
-                animate={{ opacity: 1, x: 0 }}
-                exit={{ opacity: 0, x: 20 }}
-              >
-                <Card title="Invoice Preview" icon={FileCheck}>
-                  <div className="space-y-6">
-                    <div className="p-4 bg-brand-muted rounded-xl border border-brand-border">
-                      <div className="flex justify-between items-start mb-4">
-                        <div>
-                          <p className="text-[10px] uppercase text-gray-500 font-bold">Invoice Number</p>
-                          <p className="text-lg font-bold font-mono">{selectedInvoice.invoiceNumber}</p>
-                        </div>
-                        <Badge variant={
-                          selectedInvoice.status === 'PAID' ? 'success' : 
-                          selectedInvoice.status === 'CANCELLED' ? 'error' :
-                          selectedInvoice.status === 'OVERDUE' ? 'error' : 'warning'
-                        }>
-                          {selectedInvoice.status}
-                        </Badge>
-                      </div>
-                      
-                      <div className="space-y-2">
-                        <p className="text-xs text-gray-400">Issued: {formatDate(selectedInvoice.createdAt)}</p>
-                        <p className="text-xs text-gray-400">Due: {formatDate(selectedInvoice.dueDate)}</p>
-                      </div>
-                    </div>
+        <Modal
+          isOpen={isDetailModalOpen}
+          onClose={() => setIsDetailModalOpen(false)}
+          title="Invoice Preview"
+          subtitle="Review invoice details, download PDF, or manage payment status."
+        >
+          {selectedInvoice && (
+            <div className="space-y-6">
+              <CowPlugInvoice 
+                invoice={selectedInvoice}
+                investor={investors.find(i => i.uid === selectedInvoice.investorId) || null}
+                onClose={() => setIsDetailModalOpen(false)}
+                showActions={true}
+              />
 
-                    <div>
-                      <h4 className="text-[10px] uppercase text-gray-500 font-bold mb-3 tracking-widest">Bill To</h4>
-                      <div className="p-3 bg-brand-surface border border-brand-border rounded-lg space-y-1">
-                        <p className="text-sm font-bold">{investors.find(i => i.uid === selectedInvoice.investorId)?.displayName || 'Investor'}</p>
-                        <p className="text-[10px] text-gray-500">{investors.find(i => i.uid === selectedInvoice.investorId)?.email}</p>
-                        <p className="text-[10px] text-gray-500">{investors.find(i => i.uid === selectedInvoice.investorId)?.address || 'Address not set'}</p>
-                      </div>
-                    </div>
-
-                    <div>
-                      <h4 className="text-[10px] uppercase text-gray-500 font-bold mb-3 tracking-widest">Items</h4>
-                      <div className="space-y-2">
-                        {selectedInvoice.sourcingDetails && (
-                          <div className="p-3 mb-3 bg-brand-green/5 border border-brand-green/10 rounded-xl text-[10px] space-y-1.5">
-                            <p className="font-bold text-brand-green uppercase tracking-wider">Livestock Specifications</p>
-                            <div className="grid grid-cols-2 gap-2">
-                              <div>
-                                <span className="text-gray-500 block">Animal Type</span>
-                                <span className="text-white font-medium">{selectedInvoice.sourcingDetails.animalType}</span>
-                              </div>
-                              <div>
-                                <span className="text-gray-500 block">Breed</span>
-                                <span className="text-white font-medium">{selectedInvoice.sourcingDetails.breed}</span>
-                              </div>
-                              <div>
-                                <span className="text-gray-500 block">Quantity</span>
-                                <span className="text-white font-medium">{selectedInvoice.sourcingDetails.quantity} Units</span>
-                              </div>
-                            </div>
-                          </div>
-                        )}
-                        {selectedInvoice.items && selectedInvoice.items.map((item, idx) => (
-                          <div key={idx} className="flex justify-between text-xs">
-                            <span className="text-gray-400">{item.description} (x{item.quantity})</span>
-                            <span className="font-semibold">{formatCurrency(item.price * item.quantity)}</span>
-                          </div>
-                        ))}
-                        <div className="pt-2 border-t border-brand-border flex justify-between">
-                          <span className="text-xs font-bold uppercase tracking-widest">Total</span>
-                          <span className="text-sm font-bold text-brand-green">{formatCurrency(selectedInvoice.totalAmount)}</span>
-                        </div>
-                      </div>
-                    </div>
-
-                    <div>
-                      <h4 className="text-[10px] uppercase text-gray-500 font-bold mb-3 tracking-widest">Bank Account Details (Payment Instructions)</h4>
-                      <div className="p-3 bg-brand-surface border border-brand-border rounded-lg space-y-1.5 font-mono text-xs">
-                        <div className="flex justify-between">
-                          <span className="text-gray-400">Bank Name:</span>
-                          <span className="font-semibold text-white">
-                            {selectedInvoice.bankDetails?.bankName || 'CowPlug Bank'}
-                          </span>
-                        </div>
-                        <div className="flex justify-between">
-                          <span className="text-gray-400">Account Name:</span>
-                          <span className="font-semibold text-white truncate max-w-[150px]" title={selectedInvoice.bankDetails?.accountName || 'CowPlugNG Operations'}>
-                            {selectedInvoice.bankDetails?.accountName || 'CowPlugNG Operations'}
-                          </span>
-                        </div>
-                        <div className="flex justify-between">
-                          <span className="text-gray-400">Account Number:</span>
-                          <span className="font-bold text-brand-green">
-                            {selectedInvoice.bankDetails?.accountNumber || '0123456789'}
-                          </span>
-                        </div>
-                      </div>
-                    </div>
-
-                    <div className="pt-6 border-t border-brand-border space-y-3">
+              <div className="pt-6 border-t border-brand-border space-y-3">
+                <Button 
+                  variant="primary" 
+                  size="sm" 
+                  className="w-full"
+                  onClick={() => handleUpdateStatus(selectedInvoice.id, 'PAID')}
+                  disabled={selectedInvoice.status === 'PAID' || selectedInvoice.status === 'CANCELLED'}
+                >
+                  <CheckCircle className="w-3 h-3 mr-2" />
+                  Mark as Paid
+                </Button>
+                {selectedInvoice.status !== 'PAID' && selectedInvoice.status !== 'CANCELLED' && (
+                  <>
+                    {!showConfirmCancel ? (
                       <Button 
-                        variant="primary" 
+                        variant="danger" 
                         size="sm" 
                         className="w-full"
-                        onClick={() => handleUpdateStatus(selectedInvoice.id, 'PAID')}
-                        disabled={selectedInvoice.status === 'PAID' || selectedInvoice.status === 'CANCELLED'}
+                        onClick={() => setShowConfirmCancel(true)}
                       >
-                        <CheckCircle className="w-3 h-3 mr-2" />
-                        Mark as Paid
+                        <X className="w-3 h-3 mr-2" />
+                        Cancel Invoice
                       </Button>
-                      {selectedInvoice.status !== 'PAID' && selectedInvoice.status !== 'CANCELLED' && (
-                        <>
-                          {!showConfirmCancel ? (
-                            <Button 
-                              variant="danger" 
-                              size="sm" 
-                              className="w-full"
-                              onClick={() => setShowConfirmCancel(true)}
-                            >
-                              <X className="w-3 h-3 mr-2" />
-                              Cancel Invoice
-                            </Button>
-                          ) : (
-                            <div className="p-3 bg-red-500/10 border border-red-500/20 rounded-xl space-y-2 mt-2">
-                              <p className="text-xs text-red-400 font-medium text-center">
-                                Are you sure you want to cancel this invoice?
-                              </p>
-                              <div className="flex gap-2">
-                                <Button
-                                  variant="danger"
-                                  size="xs"
-                                  className="flex-1 bg-red-600 hover:bg-red-700 text-white"
-                                  onClick={async () => {
-                                    await handleUpdateStatus(selectedInvoice.id, 'CANCELLED');
-                                    setShowConfirmCancel(false);
-                                  }}
-                                >
-                                  Yes, Cancel
-                                </Button>
-                                <Button
-                                  variant="outline"
-                                  size="xs"
-                                  className="flex-1 border-brand-border hover:bg-brand-muted text-gray-300"
-                                  onClick={() => setShowConfirmCancel(false)}
-                                >
-                                  No, Keep It
-                                </Button>
-                              </div>
-                            </div>
-                          )}
-                        </>
-                      )}
-                    </div>
-                  </div>
-                </Card>
-              </motion.div>
-            ) : (
-              <div className="h-full flex items-center justify-center border-2 border-dashed border-brand-border rounded-xl p-8 text-center text-gray-500">
-                <div className="space-y-2">
-                  <FileText className="w-8 h-8 mx-auto opacity-20" />
-                  <p className="text-sm">Select an invoice to preview details, send to investor, or record payment manually.</p>
-                </div>
+                    ) : (
+                      <div className="p-3 bg-red-500/10 border border-red-500/20 rounded-xl space-y-2 mt-2">
+                        <p className="text-xs text-red-400 font-medium text-center">
+                          Are you sure you want to cancel this invoice?
+                        </p>
+                        <div className="flex gap-2">
+                          <Button
+                            variant="danger"
+                            size="xs"
+                            className="flex-1 bg-red-600 hover:bg-red-700 text-white"
+                            onClick={async () => {
+                              await handleUpdateStatus(selectedInvoice.id, 'CANCELLED');
+                              setShowConfirmCancel(false);
+                            }}
+                          >
+                            Yes, Cancel
+                          </Button>
+                          <Button
+                            variant="outline"
+                            size="xs"
+                            className="flex-1 border-brand-border hover:bg-brand-muted text-slate-700"
+                            onClick={() => setShowConfirmCancel(false)}
+                          >
+                            No, Keep It
+                          </Button>
+                        </div>
+                      </div>
+                    )}
+                  </>
+                )}
               </div>
-            )}
-          </AnimatePresence>
+            </div>
+          )}
+        </Modal>
         </div>
       </div>
 
@@ -425,13 +376,13 @@ export const InvoiceManager: React.FC = () => {
                 <div className="flex items-center gap-3">
                   <FileText className="w-5 h-5 text-brand-green" />
                   <div>
-                    <h3 className="text-base font-bold text-white">Create Manual Invoice</h3>
-                    <p className="text-[10px] text-gray-400 uppercase tracking-wider mt-0.5">Attach custom payment bank coordinates</p>
+                    <h3 className="text-base font-bold text-slate-900">Create Manual Invoice</h3>
+                    <p className="text-[10px] text-slate-600 uppercase tracking-wider mt-0.5">Attach custom payment bank coordinates</p>
                   </div>
                 </div>
                 <button 
                   onClick={() => setIsCreateOpen(false)}
-                  className="p-1 rounded-lg text-gray-400 hover:text-white hover:bg-brand-muted transition-colors"
+                  className="p-1 rounded-lg text-slate-600 hover:text-white hover:bg-brand-muted transition-colors"
                 >
                   <X className="w-5 h-5" />
                 </button>
@@ -442,12 +393,12 @@ export const InvoiceManager: React.FC = () => {
                 {/* Investor and Core Data */}
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                   <div className="space-y-1.5">
-                    <label className="text-sm font-medium text-gray-300">Select Investor</label>
+                    <label className="text-sm font-medium text-slate-700">Select Investor</label>
                     <select 
                       value={investorId}
                       onChange={(e) => setInvestorId(e.target.value)}
                       required
-                      className="w-full bg-brand-dark border border-brand-border rounded-lg px-4 py-2 text-white focus:outline-none focus:ring-2 focus:ring-brand-green/20 focus:border-brand-green"
+                      className="w-full bg-white border border-brand-border rounded-lg px-4 py-2 text-slate-900 focus:outline-none focus:ring-2 focus:ring-brand-green/20 focus:border-brand-green"
                     >
                       <option value="">-- Choose Investor --</option>
                       {investors.map(inv => (
@@ -464,13 +415,13 @@ export const InvoiceManager: React.FC = () => {
                   />
 
                   <div className="space-y-1.5 md:col-span-2">
-                    <label className="text-sm font-medium text-gray-300">Due Date</label>
+                    <label className="text-sm font-medium text-slate-700">Due Date</label>
                     <input 
                       type="date"
                       value={dueDateStr}
                       onChange={(e) => setDueDateStr(e.target.value)}
                       required
-                      className="w-full bg-brand-dark border border-brand-border rounded-lg px-4 py-2 text-white focus:outline-none"
+                      className="w-full bg-white border border-brand-border rounded-lg px-4 py-2 text-slate-900 focus:outline-none"
                     />
                   </div>
                 </div>
@@ -504,40 +455,51 @@ export const InvoiceManager: React.FC = () => {
                 <div className="border-t border-brand-border pt-6 space-y-4">
                   <div className="flex items-center justify-between">
                     <h4 className="text-xs font-bold text-brand-green uppercase tracking-wider">Invoice Items</h4>
-                    <Button type="button" variant="outline" size="sm" onClick={handleAddItem}>
-                      <Plus className="w-3.5 h-3.5 mr-1" />
-                      Add Item
+                    <Button type="button" variant="outline" size="sm" onClick={handleAddItem} className="flex items-center gap-1.5 font-bold">
+                      <Plus className="w-4 h-4 text-emerald-700" />
+                      <span>Add Item</span>
                     </Button>
                   </div>
 
                   <div className="space-y-3">
                     {items.map((item, idx) => (
-                      <div key={idx} className="flex gap-2 items-end bg-brand-dark/20 border border-brand-border p-3 rounded-lg relative group">
-                        <div className="flex-1">
+                      <div key={idx} className="flex flex-col sm:flex-row gap-3 items-start sm:items-end bg-slate-50 border border-slate-200/80 p-3.5 rounded-xl relative">
+                        <div className="flex-1 w-full">
                           <Input 
-                            label="Description" 
-                            placeholder="e.g. Red Boran Breeding Cow" 
+                            label="Title / Description" 
+                            placeholder="e.g. Balami Ram Purchase / Management Fee" 
                             value={item.description}
                             onChange={(e) => handleItemChange(idx, 'description', e.target.value)}
                             required
                           />
                         </div>
-                        <div className="w-20">
-                          <Input 
-                            label="Qty" 
-                            type="number"
-                            min="1"
-                            value={item.quantity}
-                            onChange={(e) => handleItemChange(idx, 'quantity', parseInt(e.target.value) || 1)}
-                            required
-                          />
+                        <div className="w-full sm:w-48 space-y-1">
+                          <label className="text-xs font-bold text-slate-700">Category</label>
+                          <select
+                            value={item.category || 'Other'}
+                            onChange={(e) => handleItemChange(idx, 'category', e.target.value)}
+                            className="w-full bg-white border border-brand-border rounded-lg px-2.5 py-2 text-xs font-medium focus:outline-none focus:ring-2 focus:ring-emerald-500/20"
+                          >
+                            <option value="Livestock Purchase">Livestock Purchase</option>
+                            <option value="Feed & Supplement">Feed & Supplement</option>
+                            <option value="Farm Management">Farm Management</option>
+                            <option value="Veterinary / Health">Veterinary / Health</option>
+                            <option value="Medication & Drugs">Medication & Drugs</option>
+                            <option value="Transportation / Logistics">Transportation / Logistics</option>
+                            <option value="Infrastructure / Farm Construction">Infrastructure / Farm Construction</option>
+                            <option value="Equipment">Equipment</option>
+                            <option value="Land / Farm Operations">Land / Farm Operations</option>
+                            <option value="Insurance">Insurance</option>
+                            <option value="Other">Other</option>
+                          </select>
                         </div>
-                        <div className="w-32">
+                        <div className="w-full sm:w-48">
                           <Input 
-                            label="Price" 
+                            label="Amount (₦)" 
                             type="number"
                             min="0"
-                            value={item.price}
+                            placeholder="500000"
+                            value={item.price || ''}
                             onChange={(e) => handleItemChange(idx, 'price', parseFloat(e.target.value) || 0)}
                             required
                           />
@@ -548,7 +510,8 @@ export const InvoiceManager: React.FC = () => {
                             variant="danger" 
                             size="sm" 
                             onClick={() => handleRemoveItem(idx)}
-                            className="p-2 h-10 w-10 flex items-center justify-center text-red-500 hover:bg-red-500/10 border-red-500/10"
+                            className="p-2.5 h-10 w-10 flex items-center justify-center text-red-500 hover:bg-red-500/10 border-red-500/20 shrink-0"
+                            title="Remove Item"
                           >
                             <Trash className="w-4 h-4" />
                           </Button>
@@ -556,23 +519,32 @@ export const InvoiceManager: React.FC = () => {
                       </div>
                     ))}
                   </div>
+
+                  <button
+                    type="button"
+                    onClick={handleAddItem}
+                    className="w-full py-2.5 border-2 border-dashed border-slate-300 hover:border-emerald-600 rounded-xl text-slate-600 hover:text-emerald-700 font-bold text-xs flex items-center justify-center gap-2 transition-colors bg-white"
+                  >
+                    <Plus className="w-4 h-4" />
+                    <span>Add Custom Title & Amount Item</span>
+                  </button>
                 </div>
 
                 {/* Additional notes */}
                 <div className="space-y-1.5 border-t border-brand-border pt-6">
-                  <label className="text-sm font-medium text-gray-300">Notes / Remarks</label>
+                  <label className="text-sm font-medium text-slate-700">Notes / Remarks</label>
                   <textarea 
                     value={notes}
                     onChange={(e) => setNotes(e.target.value)}
                     placeholder="Add terms, references, or instructions..."
                     rows={3}
-                    className="w-full bg-brand-dark border border-brand-border rounded-lg px-4 py-2 text-white text-sm focus:outline-none"
+                    className="w-full bg-white border border-brand-border rounded-lg px-4 py-2 text-slate-900 text-sm focus:outline-none"
                   />
                 </div>
 
                 {/* Total dynamic calculation block */}
                 <div className="bg-brand-muted/30 border border-brand-border rounded-xl p-4 flex justify-between items-center">
-                  <span className="text-xs font-bold text-gray-400">Calculated Invoice Total:</span>
+                  <span className="text-xs font-bold text-slate-600">Calculated Invoice Total:</span>
                   <span className="text-lg font-extrabold text-brand-green">
                     {formatCurrency(items.reduce((sum, item) => sum + (item.price * item.quantity), 0))}
                   </span>

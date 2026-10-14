@@ -4,14 +4,16 @@ import {
   Calendar, Package, ChevronRight, CheckCircle,
   Clock, AlertCircle, User, Phone, Map, Navigation
 } from 'lucide-react';
-import { db } from '../../lib/firebase';
+import { db, logActivity } from '../../lib/firebase';
 import { collection, query, onSnapshot, doc, updateDoc, where } from 'firebase/firestore';
 import { DeliveryRequest, DeliveryStatus, UserProfile, UserRole } from '../../types';
 import { Card, Button, Badge, Input } from '../UI';
 import { cn, formatDate } from '../../lib/utils';
 import { motion, AnimatePresence } from 'motion/react';
+import { useAuth } from '../../lib/AuthContext';
 
 export const DeliveryManager: React.FC = () => {
+  const { profile } = useAuth();
   const [deliveries, setDeliveries] = useState<DeliveryRequest[]>([]);
   const [investors, setInvestors] = useState<UserProfile[]>([]);
   const [loading, setLoading] = useState(true);
@@ -35,6 +37,17 @@ export const DeliveryManager: React.FC = () => {
 
   const handleStatusChange = async (id: string, status: DeliveryStatus) => {
     await updateDoc(doc(db, 'deliveryRequests', id), { status });
+    
+    if (profile) {
+      await logActivity(
+        profile.uid,
+        profile.displayName || profile.email,
+        'DELIVERY_STATUS_UPDATE',
+        'DELIVERY',
+        id,
+        `Changed delivery status to ${status.replace('_', ' ')}`
+      );
+    }
   };
 
   return (
@@ -75,10 +88,10 @@ export const DeliveryManager: React.FC = () => {
                         <Package className="w-5 h-5 text-brand-green" />
                       </div>
                       <div>
-                        <p className="text-sm font-bold text-white">
+                        <p className="text-sm font-bold text-slate-800">
                           {investors.find(i => i.uid === del.investorId)?.displayName}
                         </p>
-                        <p className="text-[10px] text-gray-500 font-mono tracking-widest">{del.id.slice(0, 10).toUpperCase()}</p>
+                        <p className="text-[10px] text-gray-500 font-mono tracking-widest">{(del.id || '').slice(0, 10).toUpperCase()}</p>
                       </div>
                     </div>
                     <Badge variant={
@@ -88,7 +101,7 @@ export const DeliveryManager: React.FC = () => {
                       {(del.status as string).replace('_', ' ')}
                     </Badge>
                   </div>
-                  <div className="flex items-center gap-4 text-[10px] text-gray-400 font-bold uppercase tracking-widest">
+                  <div className="flex items-center gap-4 text-[10px] text-slate-600 font-bold uppercase tracking-widest">
                     <div className="flex items-center gap-1">
                       <MapPin className="w-3 h-3" />
                       {del.address}

@@ -5,7 +5,7 @@ import {
   CreditCard, FileText, Activity, Trash2, CheckCircle,
   XCircle, Edit
 } from 'lucide-react';
-import { db } from '../../lib/firebase';
+import { db, logActivity } from '../../lib/firebase';
 import { collection, query, onSnapshot, doc, updateDoc, deleteDoc } from 'firebase/firestore';
 import { UserProfile, UserRole } from '../../types';
 import { Card, Button, Badge, Input } from '../UI';
@@ -14,7 +14,7 @@ import { motion, AnimatePresence } from 'motion/react';
 import { useAuth } from '../../lib/AuthContext';
 
 export const InvestorManager: React.FC = () => {
-  const { hasPermission } = useAuth();
+  const { hasPermission, profile } = useAuth();
   const [investors, setInvestors] = useState<UserProfile[]>([]);
   const [loading, setLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState('');
@@ -25,7 +25,19 @@ export const InvestorManager: React.FC = () => {
     const q = query(collection(db, 'users'));
     const unsubscribe = onSnapshot(q, (snapshot) => {
       const users = snapshot.docs.map(doc => doc.data() as UserProfile)
-        .filter(user => user.role === UserRole.INVESTOR);
+        .filter(user => {
+          const role = (user.role || '').toLowerCase();
+          const email = (user.email || '').toLowerCase();
+          const roleName = (user.roleName || '').toLowerCase();
+          
+          if (role === 'admin' || role === 'super_admin' || role === 'staff' || role === 'administrator') return false;
+          if (email === 'tugbobodare4@gmail.com') return false;
+          if (email.includes('admin') || email.includes('manager')) return false;
+          if (roleName.includes('admin') || roleName.includes('super') || roleName.includes('manager') || roleName.includes('staff')) return false;
+          if (user.permissions && Array.isArray(user.permissions) && user.permissions.some(p => p.includes('admin') || p.includes('dashboard.view'))) return false;
+
+          return true;
+        });
       setInvestors(users);
       setLoading(false);
     });
@@ -33,9 +45,9 @@ export const InvestorManager: React.FC = () => {
   }, []);
 
   const filteredInvestors = investors.filter(inv => {
-    const matchesSearch = inv.displayName.toLowerCase().includes(searchTerm.toLowerCase()) ||
-                         inv.email.toLowerCase().includes(searchTerm.toLowerCase()) ||
-                         inv.investorId?.toLowerCase().includes(searchTerm.toLowerCase());
+    const matchesSearch = (inv.displayName || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
+                         (inv.email || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
+                         (inv.investorId || '').toLowerCase().includes(searchTerm.toLowerCase());
     const matchesStatus = filterStatus === 'ALL' || inv.status === filterStatus;
     return matchesSearch && matchesStatus;
   });
@@ -43,6 +55,16 @@ export const InvestorManager: React.FC = () => {
   const handleStatusChange = async (uid: string, newStatus: 'ACTIVE' | 'SUSPENDED') => {
     try {
       await updateDoc(doc(db, 'users', uid), { status: newStatus });
+      if (profile) {
+        await logActivity(
+          profile.uid,
+          profile.displayName || profile.email,
+          newStatus === 'ACTIVE' ? 'USER_ACTIVATED' : 'USER_SUSPENDED',
+          'USER',
+          uid,
+          `Administrator ${profile.displayName} changed status of user account to ${newStatus}`
+        );
+      }
     } catch (error) {
       console.error("Error updating status:", error);
     }
@@ -56,6 +78,16 @@ export const InvestorManager: React.FC = () => {
     if (confirm("Are you sure you want to delete this investor? This action cannot be undone.")) {
       try {
         await deleteDoc(doc(db, 'users', uid));
+        if (profile) {
+          await logActivity(
+            profile.uid,
+            profile.displayName || profile.email,
+            'USER_DELETED',
+            'USER',
+            uid,
+            `Administrator ${profile.displayName} deleted user account permanently`
+          );
+        }
         setSelectedInvestor(null);
       } catch (error) {
         console.error("Error deleting investor:", error);
@@ -121,7 +153,7 @@ export const InvestorManager: React.FC = () => {
                             {inv.displayName[0]}
                           </div>
                           <div>
-                            <p className="text-sm font-semibold text-white">{inv.displayName}</p>
+                            <p className="text-sm font-semibold text-slate-800">{inv.displayName}</p>
                             <p className="text-[10px] text-gray-500">{inv.email}</p>
                           </div>
                         </div>
@@ -137,7 +169,7 @@ export const InvestorManager: React.FC = () => {
                           {inv.status}
                         </Badge>
                       </td>
-                      <td className="py-4 text-xs text-gray-400">
+                      <td className="py-4 text-xs text-slate-600">
                         {formatDate(inv.createdAt)}
                       </td>
                       <td className="py-4 text-right">
@@ -191,6 +223,16 @@ export const InvestorManager: React.FC = () => {
                         <Calendar className="w-4 h-4 text-gray-500" />
                         <span>Joined {formatDate(selectedInvestor.createdAt)}</span>
                       </div>
+                    </div>
+
+                    {/* Customer Financial Overview */}
+                    <div className="p-4 bg-emerald-50 rounded-2xl border border-emerald-100 space-y-2 text-xs">
+                      <span className="text-[10px] font-black uppercase tracking-wider text-emerald-800 block">
+                        Customer Financial Summary
+                      </span>
+                      <p className="text-slate-600">
+                        Financial tracking for invoices, spending ledger, and assigned livestock is automatically managed under this customer profile.
+                      </p>
                     </div>
 
                     <div className="pt-6 border-t border-brand-border grid grid-cols-2 gap-3">

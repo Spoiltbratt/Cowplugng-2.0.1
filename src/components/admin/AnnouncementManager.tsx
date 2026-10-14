@@ -4,7 +4,7 @@ import {
   Calendar, Users, Target, Send, Clock,
   Eye, Globe, User, MessageSquare, AlertTriangle, Shield, Settings, Info, CheckCircle
 } from 'lucide-react';
-import { db } from '../../lib/firebase';
+import { db, logActivity } from '../../lib/firebase';
 import { 
   collection, query, onSnapshot, doc, updateDoc, addDoc, deleteDoc, orderBy, getDocs, where, writeBatch 
 } from 'firebase/firestore';
@@ -12,8 +12,10 @@ import { Announcement, UserRole, NotificationCategory, NotificationPriority, Use
 import { Card, Button, Badge, Input } from '../UI';
 import { cn, formatDate } from '../../lib/utils';
 import { motion, AnimatePresence } from 'motion/react';
+import { useAuth } from '../../lib/AuthContext';
 
 export const AnnouncementManager: React.FC = () => {
+  const { profile } = useAuth();
   const [announcements, setAnnouncements] = useState<Announcement[]>([]);
   const [investors, setInvestors] = useState<UserProfile[]>([]);
   const [loading, setLoading] = useState(true);
@@ -166,6 +168,17 @@ export const AnnouncementManager: React.FC = () => {
         });
         await batch.commit();
       }
+      
+      if (profile) {
+        await logActivity(
+          profile.uid,
+          profile.displayName || profile.email,
+          'ANNOUNCEMENT_PUBLISH',
+          'ANNOUNCEMENT',
+          annRef.id,
+          `Published broadcast: ${newAnnouncement.title}. Targeted: ${newAnnouncement.audienceType}`
+        );
+      }
 
       setIsAdding(false);
       setNewAnnouncement({
@@ -190,6 +203,17 @@ export const AnnouncementManager: React.FC = () => {
 
   try {
     await deleteDoc(doc(db, "announcements", id));
+    
+    if (profile) {
+      await logActivity(
+        profile.uid,
+        profile.displayName || profile.email,
+        'ANNOUNCEMENT_DELETE',
+        'ANNOUNCEMENT',
+        id,
+        `Deleted broadcast announcement (ID: ${id})`
+      );
+    }
     console.log("Announcement deleted successfully");
   } catch (error) {
     console.error("Delete failed:", error);
@@ -234,14 +258,14 @@ export const AnnouncementManager: React.FC = () => {
                         <Badge variant="default">{(ann as any).priority || 'INFO'}</Badge>
                       </div>
                     </div>
-                    <h3 className="text-sm font-bold text-white mb-2">{ann.title}</h3>
-                    <p className="text-xs text-gray-400 mb-4 leading-relaxed">{ann.content}</p>
+                    <h3 className="text-sm font-bold text-slate-900 mb-2">{ann.title}</h3>
+                    <p className="text-xs text-slate-600 mb-4 leading-relaxed">{ann.content}</p>
                     
                     <div className="flex items-center justify-between border-t border-brand-border/40 pt-3 text-[10px] text-gray-500">
                       <div>
                         Target: <span className="font-bold text-brand-green">{(ann as any).audienceType || 'ALL'}</span> 
                         {((ann as any).targetValue) && (
-                          <span className="ml-1 text-white">({(ann as any).targetValue})</span>
+                          <span className="ml-1 text-slate-900">({(ann as any).targetValue})</span>
                         )}
                       </div>
                       <Button variant="ghost" size="sm" onClick={() => handleDelete(ann.id)} className="opacity-0 group-hover:opacity-100 transition-opacity p-1 h-auto">

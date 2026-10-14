@@ -18,6 +18,7 @@ export const OpportunityManager: React.FC = () => {
   const [custodians, setCustodians] = useState<UserProfile[]>([]);
   const [loading, setLoading] = useState(true);
   const [selectedOpportunity, setSelectedOpportunity] = useState<Opportunity | null>(null);
+  const [expandedAppId, setExpandedAppId] = useState<string | null>(null);
 
   // Add / Edit form states
   const [isAdding, setIsAdding] = useState(false);
@@ -30,9 +31,51 @@ export const OpportunityManager: React.FC = () => {
   const [formDeadline, setFormDeadline] = useState('');
   const [formStatus, setFormStatus] = useState<'OPEN' | 'CLOSED'>('OPEN');
 
+  // Skeleton Components
+  const OpportunitySkeleton = () => (
+    <div className="p-4 rounded-xl border border-brand-border/50 bg-brand-muted/10 animate-pulse">
+      <div className="flex justify-between items-start mb-3">
+        <div className="h-4 w-3/4 bg-slate-200 rounded" />
+        <div className="h-4 w-12 bg-slate-200 rounded-full" />
+      </div>
+      <div className="space-y-3 mb-5">
+        <div className="flex items-center gap-2">
+          <div className="w-3 h-3 bg-slate-200 rounded-full" />
+          <div className="h-2 w-1/2 bg-slate-200 rounded" />
+        </div>
+        <div className="flex items-center gap-2">
+          <div className="w-3 h-3 bg-slate-200 rounded-full" />
+          <div className="h-2 w-1/3 bg-slate-200 rounded" />
+        </div>
+      </div>
+      <div className="flex justify-between items-center pt-2 border-t border-brand-border/10">
+        <div className="h-2 w-16 bg-slate-200 rounded" />
+        <div className="h-2 w-16 bg-slate-200 rounded" />
+      </div>
+    </div>
+  );
+
+  const ApplicationSkeleton = () => (
+    <div className="p-4 rounded-xl border border-brand-border/50 bg-brand-surface animate-pulse flex items-center justify-between gap-4">
+      <div className="flex items-center gap-3 flex-1">
+        <div className="w-10 h-10 rounded-full bg-slate-200" />
+        <div className="space-y-2 flex-1">
+          <div className="h-3 w-1/3 bg-slate-200 rounded" />
+          <div className="h-2 w-1/2 bg-slate-200 rounded" />
+        </div>
+      </div>
+      <div className="flex gap-2">
+        <div className="w-8 h-8 rounded bg-slate-200" />
+        <div className="w-8 h-8 rounded bg-slate-200" />
+      </div>
+    </div>
+  );
+
   useEffect(() => {
     const unsubOpp = onSnapshot(query(collection(db, 'opportunities')), (snapshot) => {
-      setOpportunities(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }) as Opportunity));
+      const opps = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }) as Opportunity);
+      // Sort by newest first
+      setOpportunities(opps.sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0)));
       setLoading(false);
     });
 
@@ -173,7 +216,9 @@ export const OpportunityManager: React.FC = () => {
         <div className="lg:col-span-2 space-y-6">
           <Card title="Active Jobs" icon={Target}>
             {loading ? (
-              <div className="text-center py-12 text-gray-500">Loading opportunities...</div>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                {[...Array(4)].map((_, i) => <OpportunitySkeleton key={i} />)}
+              </div>
             ) : opportunities.length === 0 ? (
               <div className="text-center py-12 border-2 border-dashed border-brand-border rounded-xl">
                 <Briefcase className="w-12 h-12 mx-auto mb-4 text-gray-700" />
@@ -195,7 +240,7 @@ export const OpportunityManager: React.FC = () => {
                     )}
                   >
                     <div className="flex justify-between items-start mb-2">
-                      <h3 className="font-bold text-white text-sm">{opp.title}</h3>
+                      <h3 className="font-bold text-slate-900 text-sm">{opp.title}</h3>
                       <Badge variant={opp.status === 'OPEN' && Date.now() < opp.deadline ? 'success' : 'error'}>
                         {opp.status === 'OPEN' && Date.now() < opp.deadline ? 'Open' : 'Closed'}
                       </Badge>
@@ -223,49 +268,88 @@ export const OpportunityManager: React.FC = () => {
           {selectedOpportunity && !isAdding && !isEditing && (
             <Card title={`Applications for ${selectedOpportunity.title}`} icon={Users}>
               <div className="space-y-4">
-                {applications.filter(a => a.opportunityId === selectedOpportunity.id).length === 0 ? (
+                {loading ? (
+                  <div className="space-y-4">
+                    {[...Array(3)].map((_, i) => <ApplicationSkeleton key={i} />)}
+                  </div>
+                ) : applications.filter(a => a.opportunityId === selectedOpportunity.id).length === 0 ? (
                   <div className="text-center py-8 text-gray-500 text-xs">No applications submitted for this role yet.</div>
                 ) : (
                   applications.filter(a => a.opportunityId === selectedOpportunity.id).map((app) => {
                     const custodian = custodians.find(c => c.uid === app.userId);
+                    const isExpanded = expandedAppId === app.id;
+                    const applicantName = custodian?.displayName || app.userName || app.fullName || 'Anonymous';
+                    const applicantEmail = custodian?.email || app.userEmail || app.email || 'No Email';
                     return (
-                      <div key={app.id} className="p-4 rounded-xl border border-brand-border bg-brand-surface flex flex-col md:flex-row md:items-center justify-between gap-4">
-                        <div className="flex items-center gap-3">
-                          <div className="w-10 h-10 rounded-full bg-brand-muted flex items-center justify-center text-xs font-bold text-brand-green">
-                            {(custodian?.displayName || app.userName || 'U')[0].toUpperCase()}
+                      <div key={app.id} className="p-4 rounded-xl border border-brand-border bg-brand-surface flex flex-col gap-4 transition-all hover:border-brand-green/30">
+                        <div 
+                          className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 cursor-pointer select-none"
+                          onClick={() => setExpandedAppId(isExpanded ? null : app.id)}
+                        >
+                          <div className="flex items-center gap-3">
+                            <div className="w-10 h-10 rounded-full bg-brand-muted flex items-center justify-center text-xs font-bold text-brand-green">
+                              {applicantName[0].toUpperCase()}
+                            </div>
+                            <div>
+                              <p className="text-sm font-bold text-slate-800 flex items-center gap-2">
+                                {applicantName}
+                                {!app.userId && <Badge variant="warning" className="text-[9px] py-0 px-1.5 font-normal tracking-wide lowercase">Guest</Badge>}
+                              </p>
+                              <p className="text-[10px] text-slate-600 font-medium">{applicantEmail}</p>
+                              <p className="text-[10px] text-gray-500 font-mono tracking-widest mt-0.5">{formatDate(app.createdAt)}</p>
+                            </div>
                           </div>
-                          <div>
-                            <p className="text-sm font-bold text-white">{custodian?.displayName || app.userName}</p>
-                            <p className="text-[10px] text-gray-400 font-medium">{custodian?.email || app.userEmail}</p>
-                            <p className="text-[10px] text-gray-500 font-mono tracking-widest mt-0.5">{formatDate(app.createdAt)}</p>
+                          <div className="flex items-center gap-3" onClick={(e) => e.stopPropagation()}>
+                            <Badge variant={
+                              app.status === 'APPROVED' ? 'success' : 
+                              app.status === 'REJECTED' ? 'error' : 'warning'
+                            }>
+                              {app.status}
+                            </Badge>
+                            <div className="flex gap-2">
+                              <Button 
+                                variant="outline" 
+                                size="sm" 
+                                className="text-brand-green border-brand-green/20 hover:bg-brand-green/10"
+                                onClick={() => handleApplicationStatus(app.id, 'APPROVED')}
+                              >
+                                <CheckCircle className="w-3 h-3" />
+                              </Button>
+                              <Button 
+                                variant="outline" 
+                                size="sm" 
+                                className="text-red-500 border-red-500/20 hover:bg-red-500/10"
+                                onClick={() => handleApplicationStatus(app.id, 'REJECTED')}
+                              >
+                                <Trash2 className="w-3 h-3" />
+                              </Button>
+                            </div>
                           </div>
                         </div>
-                        <div className="flex items-center gap-3">
-                          <Badge variant={
-                            app.status === 'APPROVED' ? 'success' : 
-                            app.status === 'REJECTED' ? 'error' : 'warning'
-                          }>
-                            {app.status}
-                          </Badge>
-                          <div className="flex gap-2">
-                            <Button 
-                              variant="outline" 
-                              size="sm" 
-                              className="text-brand-green border-brand-green/20"
-                              onClick={() => handleApplicationStatus(app.id, 'APPROVED')}
-                            >
-                              <CheckCircle className="w-3 h-3" />
-                            </Button>
-                            <Button 
-                              variant="outline" 
-                              size="sm" 
-                              className="text-red-500 border-red-500/20"
-                              onClick={() => handleApplicationStatus(app.id, 'REJECTED')}
-                            >
-                              <Trash2 className="w-3 h-3" />
-                            </Button>
+
+                        {/* Collapsible content */}
+                        {isExpanded && (
+                          <div className="border-t border-brand-border/60 pt-4 mt-1 text-xs space-y-3 animate-in fade-in duration-200">
+                            {app.phoneNumber && (
+                              <div>
+                                <h5 className="text-[9px] uppercase tracking-wider font-bold text-slate-500 mb-0.5">Phone Number</h5>
+                                <p className="text-slate-800 font-semibold select-all">{app.phoneNumber}</p>
+                              </div>
+                            )}
+                            {app.experience && (
+                              <div>
+                                <h5 className="text-[9px] uppercase tracking-wider font-bold text-slate-500 mb-0.5">Experience & Qualifications</h5>
+                                <p className="text-slate-700 leading-relaxed whitespace-pre-wrap">{app.experience}</p>
+                              </div>
+                            )}
+                            {app.coverLetter && (
+                              <div>
+                                <h5 className="text-[9px] uppercase tracking-wider font-bold text-slate-500 mb-0.5">Cover Letter / Message</h5>
+                                <p className="text-slate-700 leading-relaxed whitespace-pre-wrap">{app.coverLetter}</p>
+                              </div>
+                            )}
                           </div>
-                        </div>
+                        )}
                       </div>
                     );
                   })
@@ -309,9 +393,9 @@ export const OpportunityManager: React.FC = () => {
                       />
                     </div>
                     <div>
-                      <label className="text-sm font-medium text-gray-300 block mb-1.5">Job Description</label>
+                      <label className="text-sm font-medium text-slate-700 block mb-1.5">Job Description</label>
                       <textarea
-                        className="w-full bg-brand-dark border border-brand-border rounded-lg px-4 py-2 text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-brand-green/20 focus:border-brand-green transition-all text-sm h-28 resize-none"
+                        className="w-full bg-white border border-brand-border rounded-lg px-4 py-2 text-slate-900 placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-brand-green/20 focus:border-brand-green transition-all text-sm h-28 resize-none"
                         placeholder="Describe the role, farm setting, responsibilities, and key aspects of this livestock management opportunity..."
                         value={formDescription}
                         onChange={e => setFormDescription(e.target.value)}
@@ -319,9 +403,9 @@ export const OpportunityManager: React.FC = () => {
                       />
                     </div>
                     <div>
-                      <label className="text-sm font-medium text-gray-300 block mb-1.5">Requirements (one per line)</label>
+                      <label className="text-sm font-medium text-slate-700 block mb-1.5">Requirements (one per line)</label>
                       <textarea
-                        className="w-full bg-brand-dark border border-brand-border rounded-lg px-4 py-2 text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-brand-green/20 focus:border-brand-green transition-all text-sm h-24 resize-none"
+                        className="w-full bg-white border border-brand-border rounded-lg px-4 py-2 text-slate-900 placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-brand-green/20 focus:border-brand-green transition-all text-sm h-24 resize-none"
                         placeholder="e.g. Minimum 3 years experience with cattle&#10;Basic veterinary knowledge&#10;Strong physical fitness"
                         value={formRequirements}
                         onChange={e => setFormRequirements(e.target.value)}
@@ -337,9 +421,9 @@ export const OpportunityManager: React.FC = () => {
                       />
                       {isEditing && (
                         <div className="space-y-1.5">
-                          <label className="text-sm font-medium text-gray-300 block">Status</label>
+                          <label className="text-sm font-medium text-slate-700 block">Status</label>
                           <select 
-                            className="w-full bg-brand-dark border border-brand-border rounded-lg px-4 py-2 text-white focus:outline-none focus:border-brand-green text-sm"
+                            className="w-full bg-white border border-brand-border rounded-lg px-4 py-2 text-slate-900 focus:outline-none focus:border-brand-green text-sm"
                             value={formStatus}
                             onChange={e => setFormStatus(e.target.value as 'OPEN' | 'CLOSED')}
                           >
@@ -371,7 +455,7 @@ export const OpportunityManager: React.FC = () => {
                   <div className="space-y-6">
                     <div>
                       <h4 className="text-[10px] uppercase text-gray-500 font-bold mb-2 tracking-widest">Description</h4>
-                      <p className="text-xs text-gray-400 leading-relaxed whitespace-pre-wrap">{selectedOpportunity.description}</p>
+                      <p className="text-xs text-slate-600 leading-relaxed whitespace-pre-wrap">{selectedOpportunity.description}</p>
                     </div>
 
                     {selectedOpportunity.requirements && selectedOpportunity.requirements.length > 0 && (
@@ -379,7 +463,7 @@ export const OpportunityManager: React.FC = () => {
                         <h4 className="text-[10px] uppercase text-gray-500 font-bold mb-2 tracking-widest">Requirements</h4>
                         <ul className="space-y-1">
                           {selectedOpportunity.requirements.map((req, idx) => (
-                            <li key={idx} className="text-xs text-gray-400 flex items-start gap-2">
+                            <li key={idx} className="text-xs text-slate-600 flex items-start gap-2">
                               <span className="w-1.5 h-1.5 rounded-full bg-brand-green mt-1.5 shrink-0" />
                               {req}
                             </li>

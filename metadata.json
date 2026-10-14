@@ -1,6 +1,6 @@
 {
-  "name": "CowPlugNG 2.0",
-  "description": "Modern livestock management platform for ownership, professional farm management, and workforce coordination.",
+  "name": "CowPlugNG",
+  "description": "Smart Agriculture — Nigeria's premier digital livestock investment, asset tracking, and installable Progressive Web App.",
   "requestFramePermissions": [],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }

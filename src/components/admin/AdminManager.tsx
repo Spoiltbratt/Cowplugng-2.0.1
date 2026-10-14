@@ -3,13 +3,13 @@ import {
   Shield, Search, Plus, Trash2, 
   ShieldAlert, ShieldCheck, Mail, Key,
   MoreVertical, UserMinus, CheckCircle, XCircle,
-  Users, ChevronDown, ChevronUp, Lock, RefreshCw, X
+  Users, ChevronDown, ChevronUp, Lock, RefreshCw, X, AlertTriangle, AlertCircle
 } from 'lucide-react';
-import { db, auth } from '../../lib/firebase';
+import { db, auth, sendNotification, notifyAdmins, logActivity } from '../../lib/firebase';
 import { sendPasswordResetEmail } from 'firebase/auth';
 import { collection, query, onSnapshot, doc, updateDoc, deleteDoc, setDoc, addDoc } from 'firebase/firestore';
-import { UserProfile, UserRole } from '../../types';
-import { Card, Button, Badge, Input } from '../UI';
+import { UserProfile, UserRole, VerificationStatus } from '../../types';
+import { Card, Button, Badge, Input, Modal } from '../UI';
 import { cn, formatDate } from '../../lib/utils';
 import { motion, AnimatePresence } from 'motion/react';
 import { useAuth } from '../../lib/AuthContext';
@@ -23,6 +23,13 @@ export const AdminManager: React.FC = () => {
   const [loading, setLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedUser, setSelectedUser] = useState<UserProfile | null>(null);
+  
+  // Modal states
+  const [isDetailModalOpen, setIsDetailModalOpen] = useState(false);
+  const [showFlagForm, setShowFlagForm] = useState(false);
+  const [flagReason, setFlagReason] = useState('');
+  const [flagMessage, setFlagMessage] = useState('');
+  const [isProcessingFlag, setIsProcessingFlag] = useState(false);
 
   // Form states (Creating / Editing)
   const [isFormOpen, setIsFormOpen] = useState(false);
@@ -110,6 +117,60 @@ export const AdminManager: React.FC = () => {
     setIsFormOpen(true);
   };
 
+  // Handle viewing a user
+  const handleViewUser = (u: UserProfile) => {
+    setSelectedUser(u);
+    setIsDetailModalOpen(true);
+    setShowFlagForm(false);
+    setFlagReason('');
+    setFlagMessage('');
+  };
+
+  const handleFlagAccount = async () => {
+    if (!selectedUser || !flagReason || !flagMessage) {
+      alert('Please provide a reason and message');
+      return;
+    }
+    
+    setIsProcessingFlag(true);
+    try {
+      const userRef = doc(db, 'users', selectedUser.uid);
+      await updateDoc(userRef, {
+        verificationStatus: VerificationStatus.VERIFICATION_ISSUE,
+        verificationIssueReason: flagReason,
+        verificationIssueMessage: flagMessage,
+        verificationReviewedAt: Date.now(),
+        isVerified: false
+      });
+
+      await logActivity(
+        'ADMIN',
+        profile?.displayName || 'System Admin',
+        'ACCOUNT_VERIFICATION_FLAGGED',
+        'USER',
+        selectedUser.uid,
+        `Flagged verification issue: ${flagReason}`
+      );
+
+      await sendNotification(
+        selectedUser.uid,
+        'Account Information Review',
+        'We need some additional information about your account. Please check your dashboard.',
+        'Security Alerts',
+        'WARNING'
+      );
+
+      alert('Account flagged successfully');
+      setShowFlagForm(false);
+      setIsDetailModalOpen(false);
+    } catch (error) {
+      console.error("Flag error:", error);
+      alert('Failed to flag account');
+    } finally {
+      setIsProcessingFlag(false);
+    }
+  };
+
   // Open form for creating
   const handleCreateClick = () => {
     setSelectedUser(null);
@@ -187,15 +248,30 @@ export const AdminManager: React.FC = () => {
         accountStatus: nextStatus
       });
 
-      await addDoc(collection(db, 'activityLogs'), {
-        adminId: profile?.uid || 'unknown',
-        adminName: profile?.displayName || profile?.email || 'Admin',
-        action: 'USER_STATUS_CHANGE',
-        targetId: userToToggle.uid,
-        targetType: 'USER',
-        newValue: { status: nextStatus },
-        timestamp: Date.now()
-      });
+      await logActivity(
+        profile?.uid || 'unknown',
+        profile?.displayName || profile?.email || 'Admin',
+        'USER_STATUS_CHANGE',
+        'USER',
+        userToToggle.uid,
+        `Changed status for ${userToToggle.displayName || userToToggle.email} to ${nextStatus}`
+      );
+
+      // Send push notification to target user and admins
+      await sendNotification(
+        userToToggle.uid,
+        `Account Status Updated: ${nextStatus.toUpperCase()}`,
+        `Your account status has been changed to ${nextStatus}.`,
+        'Security Alerts',
+        nextStatus === 'active' ? 'SUCCESS' : 'WARNING'
+      );
+
+      await notifyAdmins(
+        'User Status Changed',
+        `Account status for ${userToToggle.displayName || userToToggle.email} was set to ${nextStatus}.`,
+        'Security Alerts',
+        'INFO'
+      );
 
       alert(`Account status updated to ${nextStatus}.`);
     } catch (err: any) {
@@ -338,7 +414,8 @@ export const AdminManager: React.FC = () => {
         permissions: selectedPermissions,
         status: statusInput,
         accountStatus: statusInput,
-        isVerified: true
+        isVerified: true,
+        verificationStatus: VerificationStatus.APPROVED
       };
 
       const targetUid = isEditing && selectedUser ? selectedUser.uid : `temp-${Math.random().toString(36).substring(2, 11)}`;
@@ -347,29 +424,15 @@ export const AdminManager: React.FC = () => {
       if (isEditing && selectedUser) {
         await updateDoc(userRef, payload);
 
-        // Audit Trail Log
-        await addDoc(collection(db, 'activityLogs'), {
-          adminId: profile.uid,
-          adminName: profile.displayName || profile.email,
-          action: 'USER_PERMISSION_UPDATE',
-          targetId: targetUid,
-          targetType: 'USER',
-          previousValue: {
-            displayName: selectedUser.displayName,
-            role: selectedUser.role,
-            roleName: selectedUser.roleName || '',
-            permissions: selectedUser.permissions || [],
-            status: selectedUser.status
-          },
-          newValue: {
-            displayName: payload.displayName,
-            role: payload.role,
-            roleName: payload.roleName,
-            permissions: payload.permissions,
-            status: payload.status
-          },
-          timestamp: Date.now()
-        });
+      // Audit Trail Log
+      await logActivity(
+        profile.uid,
+        profile.displayName || profile.email,
+        'USER_PERMISSION_UPDATE',
+        'USER',
+        targetUid,
+        `Updated permissions/role for ${payload.displayName}. Role: ${payload.roleName}`
+      );
 
         alert("User account updated successfully.");
       } else {
@@ -382,6 +445,7 @@ export const AdminManager: React.FC = () => {
           roleName: payload.roleName,
           permissions: payload.permissions,
           isVerified: true,
+          verificationStatus: VerificationStatus.APPROVED,
           status: payload.status!,
           accountStatus: payload.status,
           phoneNumber: payload.phoneNumber,
@@ -391,15 +455,14 @@ export const AdminManager: React.FC = () => {
         await setDoc(userRef, createPayload);
 
         // Audit Trail Log
-        await addDoc(collection(db, 'activityLogs'), {
-          adminId: profile.uid,
-          adminName: profile.displayName || profile.email,
-          action: 'USER_CREATED',
-          targetId: targetUid,
-          targetType: 'USER',
-          newValue: createPayload,
-          timestamp: Date.now()
-        });
+        await logActivity(
+          profile.uid,
+          profile.displayName || profile.email,
+          'USER_CREATED',
+          'USER',
+          targetUid,
+          `Pre-registered new user profile for ${createPayload.email} with role ${createPayload.roleName}`
+        );
 
         alert(`Pre-registered user profile created under email ${payload.email}. Role and permissions will load automatically when they sign up!`);
       }
@@ -414,8 +477,8 @@ export const AdminManager: React.FC = () => {
   // Filter permission groups based on permissionSearch
   const filteredPermissions = ALL_PERMISSIONS.map(group => {
     const matched = group.permissions.filter(p => 
-      p.name.toLowerCase().includes(permissionSearch.toLowerCase()) ||
-      p.description.toLowerCase().includes(permissionSearch.toLowerCase())
+      (p.name || '').toLowerCase().includes(permissionSearch.toLowerCase()) ||
+      (p.description || '').toLowerCase().includes(permissionSearch.toLowerCase())
     );
     return { ...group, permissions: matched };
   }).filter(group => group.permissions.length > 0);
@@ -470,7 +533,7 @@ export const AdminManager: React.FC = () => {
                           "group hover:bg-brand-muted/50 transition-colors cursor-pointer",
                           selectedUser?.uid === u.uid && "bg-brand-muted"
                         )}
-                        onClick={() => handleEditClick(u)}
+                        onClick={() => handleViewUser(u)}
                       >
                         <td className="py-4">
                           <div className="flex items-center gap-3">
@@ -478,7 +541,7 @@ export const AdminManager: React.FC = () => {
                               {(u.displayName || u.email || '?')[0].toUpperCase()}
                             </div>
                             <div>
-                              <p className="text-sm font-semibold text-white">{u.displayName || 'Unnamed User'}</p>
+                              <p className="text-sm font-semibold text-slate-800">{u.displayName || 'Unnamed User'}</p>
                               <p className="text-[10px] text-gray-500">{u.email || 'No email'}</p>
                             </div>
                           </div>
@@ -488,7 +551,7 @@ export const AdminManager: React.FC = () => {
                             {(u.role || '').replace('_', ' ')}
                           </Badge>
                         </td>
-                        <td className="py-4 text-sm text-gray-300 font-medium">
+                        <td className="py-4 text-sm text-slate-700 font-medium">
                           {u.roleName || '—'}
                         </td>
                         <td className="py-4">
@@ -502,7 +565,7 @@ export const AdminManager: React.FC = () => {
                               <Button 
                                 variant="ghost" 
                                 size="sm" 
-                                className="p-1 h-auto text-gray-400 hover:text-white"
+                                className="p-1 h-auto text-slate-600 hover:text-white"
                                 onClick={() => handleToggleStatus(u)}
                                 title={u.status === 'active' ? 'Suspend Account' : 'Reactivate Account'}
                               >
@@ -513,7 +576,7 @@ export const AdminManager: React.FC = () => {
                               <Button 
                                 variant="ghost" 
                                 size="sm" 
-                                className="p-1 h-auto text-gray-400 hover:text-white"
+                                className="p-1 h-auto text-slate-600 hover:text-white"
                                 onClick={() => handleTriggerResetPassword(u.email)}
                                 title="Send Reset Password Email"
                               >
@@ -541,127 +604,175 @@ export const AdminManager: React.FC = () => {
             )}
           </Card>
         </div>
+      </div>
 
-        {/* Selected User Details Sidebar Display */}
-        <div>
-          <AnimatePresence mode="wait">
-            {selectedUser && !isFormOpen ? (
-              <motion.div
-                initial={{ opacity: 0, x: 20 }}
-                animate={{ opacity: 1, x: 0 }}
-                exit={{ opacity: 0, x: 20 }}
+      <Modal
+        isOpen={isDetailModalOpen}
+        onClose={() => setIsDetailModalOpen(false)}
+        title="User Control & Details"
+        subtitle="Account Security & Permissions"
+      >
+        {selectedUser && (
+          <div className="space-y-6">
+            <div className="flex flex-col items-center text-center">
+              <div className="w-20 h-20 rounded-full bg-gradient-to-br from-gray-700 to-gray-900 border border-brand-border flex items-center justify-center text-xl font-bold mb-4 text-brand-green shadow-xl shadow-brand-green/5">
+                {(selectedUser.displayName || selectedUser.email || '?')[0].toUpperCase()}
+              </div>
+              <h3 className="text-lg font-bold text-slate-900">{selectedUser.displayName || 'Unnamed User'}</h3>
+              <p className="text-xs text-slate-600 mt-1">{selectedUser.email || 'No email'}</p>
+              {selectedUser.phoneNumber && (
+                <p className="text-[10px] text-gray-500 mt-1 font-mono">{selectedUser.phoneNumber}</p>
+              )}
+            </div>
+
+            <div className="space-y-3 bg-slate-100 border border-brand-border rounded-xl p-4">
+              <div className="flex justify-between items-center text-xs">
+                <span className="text-gray-500 font-medium">Assigned Custom Role</span>
+                <span className="text-slate-900 font-semibold">{selectedUser.roleName || 'No custom role name'}</span>
+              </div>
+              <div className="flex justify-between items-center text-xs">
+                <span className="text-gray-500 font-medium">Core System Access</span>
+                <Badge variant={selectedUser.role === UserRole.SUPER_ADMIN ? 'primary' : 'default'}>
+                  {(selectedUser.role || '').replace('_', ' ')}
+                </Badge>
+              </div>
+              <div className="flex justify-between items-center text-xs">
+                <span className="text-gray-500 font-medium">Account Status</span>
+                <Badge variant={selectedUser.status === 'active' ? 'success' : selectedUser.status === 'suspended' ? 'error' : 'warning'}>
+                  {selectedUser.status || 'pending'}
+                </Badge>
+              </div>
+              <div className="flex justify-between items-center text-xs">
+                <span className="text-gray-500 font-medium">Member Since</span>
+                <span className="text-slate-600 font-mono font-bold text-[10px]">
+                  {selectedUser.createdAt ? formatDate(selectedUser.createdAt) : 'N/A'}
+                </span>
+              </div>
+            </div>
+
+            <div className="space-y-2">
+              <Button 
+                variant="primary" 
+                size="sm"
+                className="w-full bg-brand-green"
+                onClick={() => {
+                  setIsDetailModalOpen(false);
+                  handleEditClick(selectedUser);
+                }}
               >
-                <Card title="User Control & Details" icon={ShieldAlert}>
-                  <div className="space-y-6">
-                    <div className="flex flex-col items-center text-center">
-                      <div className="w-20 h-20 rounded-full bg-gradient-to-br from-gray-700 to-gray-900 border border-brand-border flex items-center justify-center text-xl font-bold mb-4 text-brand-green shadow-xl shadow-brand-green/5">
-                        {(selectedUser.displayName || selectedUser.email || '?')[0].toUpperCase()}
-                      </div>
-                      <h3 className="text-lg font-bold text-white">{selectedUser.displayName || 'Unnamed User'}</h3>
-                      <p className="text-xs text-gray-400 mt-1">{selectedUser.email || 'No email'}</p>
-                      {selectedUser.phoneNumber && (
-                        <p className="text-[10px] text-gray-500 mt-1 font-mono">{selectedUser.phoneNumber}</p>
-                      )}
-                    </div>
+                <Shield className="w-4 h-4 mr-2" />
+                Edit Permissions & Role
+              </Button>
+              
+              <div className="grid grid-cols-2 gap-2">
+                {hasPermission('users.suspend') && (
+                  <Button 
+                    variant="outline" 
+                    size="sm"
+                    className={cn(selectedUser.status === 'active' ? 'text-orange-500' : 'text-green-500')}
+                    onClick={() => handleToggleStatus(selectedUser)}
+                  >
+                    {selectedUser.status === 'active' ? (
+                      <>
+                        <UserMinus className="w-3 h-3 mr-2" />
+                        Suspend Account
+                      </>
+                    ) : (
+                      <>
+                        <CheckCircle className="w-3 h-3 mr-2" />
+                        Activate Account
+                      </>
+                    )}
+                  </Button>
+                )}
 
-                    <div className="space-y-3 bg-brand-dark/40 border border-brand-border rounded-xl p-4">
-                      <div className="flex justify-between items-center text-xs">
-                        <span className="text-gray-500 font-medium">Assigned Custom Role</span>
-                        <span className="text-white font-semibold">{selectedUser.roleName || 'No custom role name'}</span>
-                      </div>
-                      <div className="flex justify-between items-center text-xs">
-                        <span className="text-gray-500 font-medium">Core System Access</span>
-                        <Badge variant={selectedUser.role === UserRole.SUPER_ADMIN ? 'primary' : 'default'}>
-                          {(selectedUser.role || '').replace('_', ' ')}
-                        </Badge>
-                      </div>
-                      <div className="flex justify-between items-center text-xs">
-                        <span className="text-gray-500 font-medium">Account Status</span>
-                        <Badge variant={selectedUser.status === 'active' ? 'success' : selectedUser.status === 'suspended' ? 'error' : 'warning'}>
-                          {selectedUser.status || 'pending'}
-                        </Badge>
-                      </div>
-                      <div className="flex justify-between items-center text-xs">
-                        <span className="text-gray-500 font-medium">Member Since</span>
-                        <span className="text-gray-400 font-mono font-bold text-[10px]">
-                          {selectedUser.createdAt ? formatDate(selectedUser.createdAt) : 'N/A'}
-                        </span>
-                      </div>
-                    </div>
+                {hasPermission('users.password_reset') && (
+                  <Button 
+                    variant="outline" 
+                    size="sm" 
+                    onClick={() => handleTriggerResetPassword(selectedUser.email)}
+                  >
+                    <Lock className="w-3 h-3 mr-2" />
+                    Reset Password
+                  </Button>
+                )}
+              </div>
 
-                    <div className="space-y-2">
-                      <Button 
-                        variant="primary" 
-                        size="sm"
-                        className="w-full bg-brand-green"
-                        onClick={() => handleEditClick(selectedUser)}
+              {!showFlagForm ? (
+                <Button 
+                  variant="ghost"
+                  className="w-full h-11 text-amber-600 hover:bg-amber-50 font-bold border border-amber-200 border-dashed"
+                  onClick={() => setShowFlagForm(true)}
+                >
+                  <AlertTriangle className="w-4 h-4 mr-2" />
+                  Flag Verification Issue
+                </Button>
+              ) : (
+                <div className="p-4 bg-amber-50 border border-amber-200 rounded-2xl space-y-4">
+                  <div className="flex items-center justify-between">
+                    <h5 className="text-sm font-bold text-amber-900">Flag Account Issue</h5>
+                    <Button size="sm" variant="ghost" onClick={() => setShowFlagForm(false)}>
+                      Cancel
+                    </Button>
+                  </div>
+                  
+                  <div className="space-y-3">
+                    <div className="space-y-1">
+                      <label className="text-[10px] font-black uppercase text-slate-500">Internal Reason</label>
+                      <select 
+                        className="w-full bg-white border border-slate-200 rounded-lg p-2 text-xs"
+                        value={flagReason}
+                        onChange={(e) => setFlagReason(e.target.value)}
                       >
-                        <Shield className="w-4 h-4 mr-2" />
-                        Edit Permissions & Role
-                      </Button>
-                      
-                      <div className="grid grid-cols-2 gap-2">
-                        {hasPermission('users.suspend') && (
-                          <Button 
-                            variant="outline" 
-                            size="sm"
-                            className={cn(selectedUser.status === 'active' ? 'text-orange-500' : 'text-green-500')}
-                            onClick={() => handleToggleStatus(selectedUser)}
-                          >
-                            {selectedUser.status === 'active' ? (
-                              <>
-                                <UserMinus className="w-3 h-3 mr-2" />
-                                Suspend Account
-                              </>
-                            ) : (
-                              <>
-                                <CheckCircle className="w-3 h-3 mr-2" />
-                                Activate Account
-                              </>
-                            )}
-                          </Button>
-                        )}
-
-                        {hasPermission('users.password_reset') && (
-                          <Button 
-                            variant="outline" 
-                            size="sm" 
-                            onClick={() => handleTriggerResetPassword(selectedUser.email)}
-                          >
-                            <Lock className="w-3 h-3 mr-2" />
-                            Reset Password
-                          </Button>
-                        )}
-                      </div>
-
-                      {hasPermission('users.delete') && (
-                        <div className="pt-4 border-t border-brand-border">
-                          <Button 
-                            variant="outline" 
-                            size="sm" 
-                            className="w-full text-red-500 border-red-500/20 hover:bg-red-500/10"
-                            onClick={() => handleDeleteUser(selectedUser)}
-                          >
-                            <Trash2 className="w-3.5 h-3.5 mr-2" />
-                            Delete Account
-                          </Button>
-                        </div>
-                      )}
+                        <option value="">Select a reason...</option>
+                        <option value="Identity information doesn't match">Identity information doesn't match</option>
+                        <option value="NIN document unclear">NIN document unclear</option>
+                        <option value="Name doesn't match submitted information">Name doesn't match submitted information</option>
+                        <option value="Additional information required">Additional information required</option>
+                        <option value="Payment/account information requires review">Payment/account information requires review</option>
+                        <option value="Other">Other</option>
+                      </select>
+                    </div>
+                    
+                    <div className="space-y-1">
+                      <label className="text-[10px] font-black uppercase text-slate-500">Message to Customer</label>
+                      <textarea 
+                        className="w-full bg-white border border-slate-200 rounded-lg p-3 text-xs min-h-[80px]"
+                        placeholder="Explain the issue clearly..."
+                        value={flagMessage}
+                        onChange={(e) => setFlagMessage(e.target.value)}
+                      />
                     </div>
                   </div>
-                </Card>
-              </motion.div>
-            ) : !isFormOpen ? (
-              <div className="h-full flex items-center justify-center border-2 border-dashed border-brand-border rounded-xl p-8 text-center text-gray-500">
-                <div className="space-y-2">
-                  <Users className="w-8 h-8 mx-auto opacity-20 text-brand-green animate-pulse" />
-                  <p className="text-sm">Select a user to configure custom RBAC permissions or manage their credentials.</p>
+
+                  <Button 
+                    className="w-full bg-amber-600 hover:bg-amber-700 text-white font-black h-11"
+                    onClick={handleFlagAccount}
+                    disabled={isProcessingFlag || !flagReason || !flagMessage}
+                  >
+                    Flag Account
+                  </Button>
                 </div>
-              </div>
-            ) : null}
-          </AnimatePresence>
-        </div>
-      </div>
+              )
+            }
+
+              {hasPermission('users.delete') && (
+                <div className="pt-4 border-t border-brand-border">
+                  <Button 
+                    variant="outline" 
+                    size="sm" 
+                    className="w-full text-red-500 border-red-500/20 hover:bg-red-500/10"
+                    onClick={() => handleDeleteUser(selectedUser)}
+                  >
+                    <Trash2 className="w-3.5 h-3.5 mr-2" />
+                    Delete Account
+                  </Button>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+      </Modal>
 
       {/* Full-Screen Backdrop / Form Panel Drawer */}
       <AnimatePresence>
@@ -689,15 +800,15 @@ export const AdminManager: React.FC = () => {
                 <div className="flex items-center gap-3">
                   <ShieldCheck className="w-5 h-5 text-brand-green" />
                   <div>
-                    <h3 className="text-base font-bold text-white">
+                    <h3 className="text-base font-bold text-slate-900">
                       {isEditing ? `Edit Security Permissions: ${nameInput}` : 'Create New Custom Role / Profile'}
                     </h3>
-                    <p className="text-[10px] text-gray-400 uppercase tracking-wider mt-0.5">Role-Based Access Control Setup</p>
+                    <p className="text-[10px] text-slate-600 uppercase tracking-wider mt-0.5">Role-Based Access Control Setup</p>
                   </div>
                 </div>
                 <button 
                   onClick={() => setIsFormOpen(false)}
-                  className="p-1 rounded-lg text-gray-400 hover:text-white hover:bg-brand-muted transition-colors"
+                  className="p-1 rounded-lg text-slate-600 hover:text-white hover:bg-brand-muted transition-colors"
                 >
                   <X className="w-5 h-5" />
                 </button>
@@ -734,11 +845,11 @@ export const AdminManager: React.FC = () => {
                   
                   {/* Status selection */}
                   <div className="space-y-1.5">
-                    <label className="text-sm font-medium text-gray-300">Account Status</label>
+                    <label className="text-sm font-medium text-slate-700">Account Status</label>
                     <select 
                       value={statusInput}
                       onChange={(e) => setStatusInput(e.target.value as any)}
-                      className="w-full bg-brand-dark border border-brand-border rounded-lg px-4 py-2 text-white focus:outline-none focus:ring-2 focus:ring-brand-green/20 focus:border-brand-green"
+                      className="w-full bg-white border border-brand-border rounded-lg px-4 py-2 text-slate-900 focus:outline-none focus:ring-2 focus:ring-brand-green/20 focus:border-brand-green"
                     >
                       <option value="active">Active</option>
                       <option value="suspended">Suspended</option>
@@ -754,11 +865,11 @@ export const AdminManager: React.FC = () => {
                   <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                     {/* Role Template Selector */}
                     <div className="space-y-1.5">
-                      <label className="text-xs font-semibold text-gray-400">Pre-defined Template</label>
+                      <label className="text-xs font-semibold text-slate-600">Pre-defined Template</label>
                       <select 
                         value={activeTemplate}
                         onChange={(e) => handleTemplateSelect(e.target.value)}
-                        className="w-full bg-brand-dark border border-brand-border rounded-lg px-3 py-2 text-xs text-white focus:outline-none focus:ring-2 focus:ring-brand-green/20 focus:border-brand-green"
+                        className="w-full bg-white border border-brand-border rounded-lg px-3 py-2 text-xs text-slate-900 focus:outline-none focus:ring-2 focus:ring-brand-green/20 focus:border-brand-green"
                       >
                         <option value="Custom">Custom Permissions</option>
                         {ROLE_TEMPLATES.map(t => (
@@ -781,14 +892,14 @@ export const AdminManager: React.FC = () => {
 
                     {/* Standard Role Mapping */}
                     <div className="space-y-1.5">
-                      <label className="text-xs font-semibold text-gray-400">System Platform Role</label>
+                      <label className="text-xs font-semibold text-slate-600">System Platform Role</label>
                       <select 
                         value={standardRole}
                         onChange={(e) => {
                           setStandardRole(e.target.value as UserRole);
                           setActiveTemplate('Custom');
                         }}
-                        className="w-full bg-brand-dark border border-brand-border rounded-lg px-3 py-2 text-xs text-white focus:outline-none"
+                        className="w-full bg-white border border-brand-border rounded-lg px-3 py-2 text-xs text-slate-900 focus:outline-none"
                       >
                         {Object.values(UserRole).map(roleOption => (
                           <option key={roleOption} value={roleOption}>{roleOption.replace('_', ' ')}</option>
@@ -814,7 +925,7 @@ export const AdminManager: React.FC = () => {
                         placeholder="Search permissions..." 
                         value={permissionSearch}
                         onChange={(e) => setPermissionSearch(e.target.value)}
-                        className="w-full bg-brand-dark border border-brand-border rounded-lg pl-8 pr-3 py-1 text-xs text-white placeholder-gray-500 focus:outline-none"
+                        className="w-full bg-white border border-brand-border rounded-lg pl-8 pr-3 py-1 text-xs text-slate-900 placeholder-gray-500 focus:outline-none"
                       />
                     </div>
                   </div>
@@ -834,8 +945,8 @@ export const AdminManager: React.FC = () => {
                             className="px-4 py-3 bg-brand-muted/30 flex items-center justify-between cursor-pointer hover:bg-brand-muted/50 transition-colors"
                           >
                             <div className="flex items-center gap-2">
-                              <span className="text-xs font-bold text-white">{group.name}</span>
-                              <span className="text-[10px] bg-brand-muted text-gray-400 px-1.5 py-0.5 rounded-full font-bold">
+                              <span className="text-xs font-bold text-slate-900">{group.name}</span>
+                              <span className="text-[10px] bg-brand-muted text-slate-600 px-1.5 py-0.5 rounded-full font-bold">
                                 {selectedInGroup.length} / {groupPermissionIds.length} selected
                               </span>
                             </div>
@@ -856,7 +967,7 @@ export const AdminManager: React.FC = () => {
                               >
                                 Clear All
                               </button>
-                              <div className="text-gray-400 hover:text-white" onClick={() => toggleCategory(group.id)}>
+                              <div className="text-slate-600 hover:text-white" onClick={() => toggleCategory(group.id)}>
                                 {isCollapsed ? <ChevronDown className="w-4 h-4 ml-2" /> : <ChevronUp className="w-4 h-4 ml-2" />}
                               </div>
                             </div>
@@ -871,7 +982,7 @@ export const AdminManager: React.FC = () => {
                                 exit={{ height: 0 }}
                                 className="overflow-hidden border-t border-brand-border"
                               >
-                                <div className="p-4 grid grid-cols-1 md:grid-cols-2 gap-3 bg-brand-dark/20">
+                                <div className="p-4 grid grid-cols-1 md:grid-cols-2 gap-3 bg-slate-100">
                                   {group.permissions.map(perm => {
                                     const isChecked = selectedPermissions.includes(perm.id);
                                     return (
@@ -889,7 +1000,7 @@ export const AdminManager: React.FC = () => {
                                           className="mt-0.5 accent-brand-green rounded w-3.5 h-3.5"
                                         />
                                         <div className="space-y-0.5">
-                                          <p className="text-xs font-semibold text-white group-hover/item:text-brand-green transition-colors">{perm.name}</p>
+                                          <p className="text-xs font-semibold text-slate-800 group-hover/item:text-brand-green transition-colors">{perm.name}</p>
                                           <p className="text-[9px] text-gray-500 font-medium leading-normal">{perm.description}</p>
                                         </div>
                                       </label>
@@ -908,7 +1019,7 @@ export const AdminManager: React.FC = () => {
                 {/* Visual Summary Box */}
                 <div className="bg-brand-muted/30 border border-brand-border rounded-xl p-4 space-y-2">
                   <div className="flex justify-between items-center">
-                    <h5 className="text-xs font-bold text-gray-400">Assigned Permissions Summary</h5>
+                    <h5 className="text-xs font-bold text-slate-600">Assigned Permissions Summary</h5>
                     <Badge variant="success">{selectedPermissions.length} Enabled</Badge>
                   </div>
                   {selectedPermissions.length === 0 ? (
@@ -916,7 +1027,7 @@ export const AdminManager: React.FC = () => {
                   ) : (
                     <div className="flex flex-wrap gap-1 max-h-24 overflow-y-auto pr-1 no-scrollbar">
                       {selectedPermissions.map(pId => (
-                        <span key={pId} className="text-[9px] bg-brand-muted text-gray-400 px-2 py-0.5 rounded font-mono font-bold tracking-tight">
+                        <span key={pId} className="text-[9px] bg-brand-muted text-slate-600 px-2 py-0.5 rounded font-mono font-bold tracking-tight">
                           {pId}
                         </span>
                       ))}
@@ -998,17 +1109,17 @@ export const AdminManager: React.FC = () => {
                   <ShieldAlert className="w-6 h-6" />
                 </div>
                 <div className="flex-1 min-w-0">
-                  <h3 className="text-base font-bold text-white truncate">
+                  <h3 className="text-base font-bold text-slate-900 truncate">
                     Confirm Permanent Deletion
                   </h3>
-                  <p className="text-xs text-gray-400 mt-1 uppercase tracking-wider font-bold text-red-500">
+                  <p className="text-xs text-slate-600 mt-1 uppercase tracking-wider font-bold text-red-500">
                     Warning: Irreversible Action
                   </p>
                 </div>
                 {!isDeletingUser && deletionProgress !== 'complete' && (
                   <button 
                     onClick={() => setShowDeleteModal(false)}
-                    className="p-1 rounded-lg text-gray-400 hover:text-white hover:bg-brand-muted transition-colors"
+                    className="p-1 rounded-lg text-slate-600 hover:text-white hover:bg-brand-muted transition-colors"
                   >
                     <X className="w-5 h-5" />
                   </button>
@@ -1019,18 +1130,18 @@ export const AdminManager: React.FC = () => {
               <div className="p-6 space-y-4 text-left">
                 {deletionProgress === 'idle' && (
                   <>
-                    <p className="text-sm text-gray-300 leading-relaxed">
-                      You are initiating a secure, cascading deletion for user <span className="font-bold text-white">{deleteTargetUser.displayName || 'Unnamed User'}</span> (<span className="text-brand-green font-medium">{deleteTargetUser.email}</span>).
+                    <p className="text-sm text-slate-700 leading-relaxed">
+                      You are initiating a secure, cascading deletion for user <span className="font-bold text-slate-900">{deleteTargetUser.displayName || 'Unnamed User'}</span> (<span className="text-brand-green font-medium">{deleteTargetUser.email}</span>).
                     </p>
 
-                    <div className="bg-brand-dark/40 border border-brand-border rounded-xl p-4 space-y-3">
-                      <h4 className="text-xs font-bold text-gray-400 uppercase tracking-widest">
+                    <div className="bg-slate-100 border border-brand-border rounded-xl p-4 space-y-3">
+                      <h4 className="text-xs font-bold text-slate-600 uppercase tracking-widest">
                         Retention Policy & Cascading Targets
                       </h4>
-                      <p className="text-[11px] text-gray-400 leading-normal">
+                      <p className="text-[11px] text-slate-600 leading-normal">
                         To comply with privacy laws and our platform's data retention policy, the following processes will run sequentially:
                       </p>
-                      <ul className="space-y-2 text-xs text-gray-300">
+                      <ul className="space-y-2 text-xs text-slate-700">
                         <li className="flex items-center gap-2">
                           <span className="w-1.5 h-1.5 rounded-full bg-red-500" />
                           <span>Revoke & permanently delete Firebase Auth Credentials</span>
@@ -1064,23 +1175,23 @@ export const AdminManager: React.FC = () => {
                   <div className="space-y-6 py-4">
                     <div className="flex flex-col items-center justify-center text-center space-y-3">
                       <RefreshCw className="w-8 h-8 text-brand-green animate-spin" />
-                      <h4 className="text-sm font-bold text-white">Permanently deleting user data...</h4>
-                      <p className="text-xs text-gray-400 max-w-xs">
+                      <h4 className="text-sm font-bold text-slate-900">Permanently deleting user data...</h4>
+                      <p className="text-xs text-slate-600 max-w-xs">
                         Executing secure server commands. Please do not close this browser tab.
                       </p>
                     </div>
 
                     {/* Progress Checklist */}
-                    <div className="border border-brand-border bg-brand-dark/20 rounded-xl p-4 space-y-3">
+                    <div className="border border-brand-border bg-slate-100 rounded-xl p-4 space-y-3">
                       <div className="flex items-center justify-between text-xs">
-                        <span className="text-gray-400 font-medium">Progress Status</span>
+                        <span className="text-slate-600 font-medium">Progress Status</span>
                         <span className="text-brand-green font-bold uppercase tracking-wider text-[10px]">Active</span>
                       </div>
                       
                       <div className="space-y-2.5 pt-1">
                         {/* Step 1 */}
                         <div className="flex items-center justify-between text-xs">
-                          <span className="text-gray-300">1. Authenticating request context</span>
+                          <span className="text-slate-700">1. Authenticating request context</span>
                           {deletionProgress === 'auth_check' ? (
                             <RefreshCw className="w-3.5 h-3.5 text-brand-green animate-spin" />
                           ) : (
@@ -1090,7 +1201,7 @@ export const AdminManager: React.FC = () => {
 
                         {/* Step 2 */}
                         <div className="flex items-center justify-between text-xs">
-                          <span className="text-gray-300">2. Revoking Firebase Auth Credentials</span>
+                          <span className="text-slate-700">2. Revoking Firebase Auth Credentials</span>
                           {deletionProgress === 'auth_check' ? (
                             <span className="text-[10px] text-gray-500 font-bold uppercase">Pending</span>
                           ) : deletionProgress === 'auth_delete' ? (
@@ -1102,7 +1213,7 @@ export const AdminManager: React.FC = () => {
 
                         {/* Step 3 */}
                         <div className="flex items-center justify-between text-xs">
-                          <span className="text-gray-300">3. Cascading associated Firestore records</span>
+                          <span className="text-slate-700">3. Cascading associated Firestore records</span>
                           {['auth_check', 'auth_delete'].includes(deletionProgress) ? (
                             <span className="text-[10px] text-gray-500 font-bold uppercase">Pending</span>
                           ) : deletionProgress === 'cascade_delete' ? (
@@ -1114,7 +1225,7 @@ export const AdminManager: React.FC = () => {
 
                         {/* Step 4 */}
                         <div className="flex items-center justify-between text-xs">
-                          <span className="text-gray-300">4. Finalizing security audit trails</span>
+                          <span className="text-slate-700">4. Finalizing security audit trails</span>
                           {['auth_check', 'auth_delete', 'cascade_delete'].includes(deletionProgress) ? (
                             <span className="text-[10px] text-gray-500 font-bold uppercase">Pending</span>
                           ) : deletionProgress === 'audit_log' ? (
@@ -1135,7 +1246,7 @@ export const AdminManager: React.FC = () => {
                       <ShieldAlert className="w-6 h-6" />
                     </div>
                     <div className="space-y-2">
-                      <h4 className="text-sm font-bold text-white">User Deletion Failed</h4>
+                      <h4 className="text-sm font-bold text-slate-900">User Deletion Failed</h4>
                       <div className="p-3 bg-red-500/5 border border-red-500/10 rounded-xl text-left text-xs text-red-400 font-mono leading-relaxed whitespace-pre-wrap max-h-48 overflow-y-auto">
                         {deletionError}
                       </div>
@@ -1153,15 +1264,15 @@ export const AdminManager: React.FC = () => {
                       <div className="w-12 h-12 rounded-full bg-brand-green/10 border border-brand-green/20 flex items-center justify-center mx-auto text-brand-green">
                         <ShieldCheck className="w-6 h-6 animate-bounce" />
                       </div>
-                      <h4 className="text-base font-bold text-white">Deconstruction Complete</h4>
-                      <p className="text-xs text-gray-400 max-w-xs mx-auto font-medium">
+                      <h4 className="text-base font-bold text-slate-900">Deconstruction Complete</h4>
+                      <p className="text-xs text-slate-600 max-w-xs mx-auto font-medium">
                         User and all associated profile details have been permanently expunged according to retention rules.
                       </p>
                     </div>
 
                     {deletionReport && (
-                      <div className="bg-brand-dark/40 border border-brand-border rounded-xl p-4 space-y-2.5">
-                        <h5 className="text-[10px] font-bold text-gray-400 uppercase tracking-widest border-b border-brand-border pb-1.5">
+                      <div className="bg-slate-100 border border-brand-border rounded-xl p-4 space-y-2.5">
+                        <h5 className="text-[10px] font-bold text-slate-600 uppercase tracking-widest border-b border-brand-border pb-1.5">
                           Data Clearance Cascade Audit
                         </h5>
                         <div className="grid grid-cols-2 gap-3 text-xs">
@@ -1171,23 +1282,23 @@ export const AdminManager: React.FC = () => {
                           </div>
                           <div className="flex justify-between border-b border-brand-border/20 pb-1">
                             <span className="text-gray-500">Notifications:</span>
-                            <span className="text-white font-bold">{deletionReport.notifications || 0} Records</span>
+                            <span className="text-slate-900 font-bold">{deletionReport.notifications || 0} Records</span>
                           </div>
                           <div className="flex justify-between border-b border-brand-border/20 pb-1">
                             <span className="text-gray-500">Sourcing:</span>
-                            <span className="text-white font-bold">{deletionReport.consultationRequests || deletionReport.sourcingRequests || 0} Records</span>
+                            <span className="text-slate-900 font-bold">{deletionReport.consultationRequests || deletionReport.sourcingRequests || 0} Records</span>
                           </div>
                           <div className="flex justify-between border-b border-brand-border/20 pb-1">
                             <span className="text-gray-500">Receipts:</span>
-                            <span className="text-white font-bold">{deletionReport.paymentReceipts || 0} Records</span>
+                            <span className="text-slate-900 font-bold">{deletionReport.paymentReceipts || 0} Records</span>
                           </div>
                           <div className="flex justify-between">
                             <span className="text-gray-500">Deliveries:</span>
-                            <span className="text-white font-bold">{deletionReport.deliveryRequests || 0} Records</span>
+                            <span className="text-slate-900 font-bold">{deletionReport.deliveryRequests || 0} Records</span>
                           </div>
                           <div className="flex justify-between">
                             <span className="text-gray-500">Invoices:</span>
-                            <span className="text-white font-bold">{deletionReport.invoices || 0} Records</span>
+                            <span className="text-slate-900 font-bold">{deletionReport.invoices || 0} Records</span>
                           </div>
                         </div>
                       </div>

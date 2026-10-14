@@ -2,7 +2,7 @@ import React, { createContext, useContext, useEffect, useState } from 'react';
 import { onAuthStateChanged, User } from 'firebase/auth';
 import { doc, getDoc, onSnapshot } from 'firebase/firestore';
 import { auth, db, handleFirestoreError, OperationType } from './firebase';
-import { UserProfile, UserRole } from '../types';
+import { UserProfile, UserRole, VerificationStatus } from '../types';
 import { getDefaultPermissionsForRole } from './permissions';
 
 interface AuthContextType {
@@ -14,6 +14,7 @@ interface AuthContextType {
   isSuperAdmin: boolean;
   isInvestor: boolean;
   signOut: () => Promise<void>;
+  reloadUser: () => Promise<void>;
   hasPermission: (permission: string) => boolean;
 }
 
@@ -26,6 +27,7 @@ const AuthContext = createContext<AuthContextType>({
   isSuperAdmin: false,
   isInvestor: false,
   signOut: async () => {},
+  reloadUser: async () => {},
   hasPermission: () => false,
 });
 
@@ -52,12 +54,9 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
             console.log("Firestore success: Profile retrieved with role:", data.role);
             
             if (data.status === 'suspended') {
-              console.warn("User is suspended. Signing out...");
-              auth.signOut();
-              setError(new Error("Your account has been suspended. Please contact support."));
-              setProfile(null);
-              setLoading(false);
-              return;
+              console.warn("User is suspended. Rendering suspended view in App.tsx...");
+              // We do NOT sign out here so that App.tsx can show the suspended screen
+              // But we still set the profile so App.tsx knows they are suspended
             }
             
             setProfile(data);
@@ -91,7 +90,9 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
                   const migratedProfile: UserProfile = {
                     ...existingData,
                     uid: user.uid,
-                    lastLogin: Date.now()
+                    lastLogin: Date.now(),
+                    verificationStatus: existingData.verificationStatus || VerificationStatus.NOT_STARTED,
+                    isVerified: existingData.verificationStatus === VerificationStatus.APPROVED || !!existingData.isVerified
                   };
                   
                   setDoc(firestoreDoc(db, 'users', user.uid), migratedProfile)
@@ -130,6 +131,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
                     status: 'active',
                     accountStatus: 'active',
                     isVerified: roleToAssign === UserRole.SUPER_ADMIN,
+                    verificationStatus: roleToAssign === UserRole.SUPER_ADMIN ? VerificationStatus.APPROVED : VerificationStatus.NOT_STARTED,
                     createdAt: Date.now()
                   };
 
@@ -183,9 +185,17 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     return () => unsubscribeAuth();
   }, []);
 
-  const isSuperAdmin = profile?.role === UserRole.SUPER_ADMIN;
-  const isAdmin = isSuperAdmin || profile?.role === UserRole.ADMIN;
-  const isInvestor = profile?.role === UserRole.INVESTOR;
+  const userEmail = (user?.email || auth.currentUser?.email || '').toLowerCase();
+  const isSuperAdmin = profile?.role === UserRole.SUPER_ADMIN || 
+                       profile?.role === 'super_admin' || 
+                       userEmail === 'tugbobodare4@gmail.com';
+  const isAdmin = isSuperAdmin || 
+                  profile?.role === UserRole.ADMIN || 
+                  profile?.role === 'admin' || 
+                  profile?.role === 'staff' ||
+                  userEmail.includes('admin') ||
+                  (profile?.permissions && Array.isArray(profile.permissions) && profile.permissions.some((p: string) => ['dashboard.view', 'admin.access'].includes(p)));
+  const isInvestor = !isAdmin && !isSuperAdmin && profile?.role === UserRole.INVESTOR;
 
   const hasPermission = (permission: string): boolean => {
     if (!profile) return false;
@@ -198,11 +208,18 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     await auth.signOut();
   };
 
+  const reloadUser = async () => {
+    if (auth.currentUser) {
+      await auth.currentUser.reload();
+      setUser({ ...auth.currentUser } as User);
+    }
+  };
+
   return (
     <AuthContext.Provider value={{ 
       user, profile, loading, error, 
       isAdmin, isSuperAdmin, isInvestor,
-      signOut,
+      signOut, reloadUser,
       hasPermission
     }}>
       {children}

@@ -35,9 +35,9 @@ export const ActivityLogs: React.FC = () => {
   };
 
   const filteredLogs = logs.filter(log => 
-    log.adminName.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    log.action.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    log.targetId.toLowerCase().includes(searchTerm.toLowerCase())
+    (log.adminName || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
+    (log.action || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
+    (log.targetId || '').toLowerCase().includes(searchTerm.toLowerCase())
   );
 
   return (
@@ -64,17 +64,17 @@ export const ActivityLogs: React.FC = () => {
             <thead>
               <tr className="border-b border-brand-border">
                 <th className="pb-4 text-[10px] uppercase text-gray-500 font-bold tracking-widest">Timestamp</th>
-                <th className="pb-4 text-[10px] uppercase text-gray-500 font-bold tracking-widest">Administrator</th>
-                <th className="pb-4 text-[10px] uppercase text-gray-500 font-bold tracking-widest">Action</th>
-                <th className="pb-4 text-[10px] uppercase text-gray-500 font-bold tracking-widest">Target</th>
-                <th className="pb-4 text-[10px] uppercase text-gray-500 font-bold tracking-widest">Status</th>
+                <th className="pb-4 text-[10px] uppercase text-gray-500 font-bold tracking-widest">User / Admin</th>
+                <th className="pb-4 text-[10px] uppercase text-gray-500 font-bold tracking-widest">Event</th>
+                <th className="pb-4 text-[10px] uppercase text-gray-500 font-bold tracking-widest">Log Details</th>
+                <th className="pb-4 text-[10px] uppercase text-gray-500 font-bold tracking-widest text-right">Target</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-brand-border">
               {filteredLogs.map((log) => (
                 <tr key={log.id} className="group hover:bg-brand-muted/30 transition-colors">
                   <td className="py-4 whitespace-nowrap">
-                    <div className="flex items-center gap-2 text-xs text-gray-400">
+                    <div className="flex items-center gap-2 text-xs text-slate-600">
                       <Clock className="w-3 h-3" />
                       {formatDate(log.timestamp)}
                     </div>
@@ -82,26 +82,26 @@ export const ActivityLogs: React.FC = () => {
                   <td className="py-4">
                     <div className="flex items-center gap-2">
                       <div className="w-6 h-6 rounded-full bg-brand-muted flex items-center justify-center text-[10px] font-bold">
-                        {log.adminName[0]}
+                        {(log.adminName || log.userName || '?')[0].toUpperCase()}
                       </div>
-                      <span className="text-sm font-semibold">{log.adminName}</span>
+                      <span className="text-sm font-semibold">{log.adminName || log.userName}</span>
                     </div>
                   </td>
                   <td className="py-4">
-                    <span className="text-xs font-mono text-brand-green bg-brand-green/10 px-2 py-0.5 rounded border border-brand-green/20">
-                      {log.action}
+                    <span className="text-[10px] font-black uppercase text-brand-green bg-brand-green/10 px-2 py-0.5 rounded border border-brand-green/20 whitespace-nowrap">
+                      {(log.action || '').replace(/_/g, ' ')}
                     </span>
                   </td>
                   <td className="py-4">
-                    <div className="flex items-center gap-2 text-xs text-gray-400">
-                      {getTargetIcon(log.targetType)}
-                      <span className="font-mono">{log.targetId.slice(0, 8)}...</span>
-                    </div>
+                    <p className="text-xs text-slate-600 max-w-md leading-relaxed">
+                      {log.details || 'No additional details provided.'}
+                    </p>
                   </td>
-                  <td className="py-4">
-                    <div className="flex items-center gap-1 text-[10px] font-bold uppercase tracking-widest text-brand-green">
-                      <Shield className="w-3 h-3" />
-                      Verified
+                  <td className="py-4 text-right">
+                    <div className="flex items-center justify-end gap-2 text-xs text-slate-500">
+                      <span className="font-mono text-[10px] uppercase font-bold text-gray-400">{log.targetType}:</span>
+                      <span className="font-mono text-[10px]">{(log.targetId || '').slice(0, 8)}...</span>
+                      {getTargetIcon(log.targetType)}
                     </div>
                   </td>
                 </tr>
